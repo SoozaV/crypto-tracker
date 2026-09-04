@@ -11,6 +11,7 @@ Endpoints de la Fase 3 (métricas), todos con scope seleccionable vía
 Endpoints de apoyo (para el selector y para alimentar datos por la API):
   * GET  /api/wallets                  lista de wallets (para el selector)
   * GET  /api/assets                   catálogo de activos
+  * GET  /api/transactions             historial (filtros wallet_id / asset_id)
   * POST /api/transactions             registra una transacción (envuelve 1.9)
   * POST /api/setup                    onboarding: depósito inicial (1.11)
 
@@ -35,7 +36,7 @@ from sqlalchemy.orm import Session
 
 from .config import CORS_ORIGINS
 from .database import get_db
-from .models import Asset, Wallet
+from .models import Asset, Transaction, Wallet
 from .services.acb_engine import ACBError, add_transaction, get_or_create_asset, get_or_create_wallet
 from .services import metrics
 from .services.price_history_service import ensure_ohlcv, update_all_assets
@@ -211,7 +212,41 @@ def asset_ohlcv(
     }
 
 
-# --- Escritura de datos (apoyo) ----------------------------------------------
+# --- Escritura / lectura de datos (apoyo) ------------------------------------
+@app.get("/api/transactions")
+def list_transactions(
+    wallet_id: Optional[int] = Query(None),
+    asset_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db),
+):
+    """Lista transacciones (más recientes primero), filtrables por wallet/activo."""
+    stmt = select(Transaction).order_by(Transaction.date_utc.desc(), Transaction.id.desc())
+    if wallet_id is not None:
+        stmt = stmt.where(Transaction.wallet_id == wallet_id)
+    if asset_id is not None:
+        stmt = stmt.where(Transaction.asset_id == asset_id)
+    rows = db.execute(stmt).scalars().all()
+    # Mapa id -> symbol para no N+1 en el frontend.
+    asset_ids = {t.asset_id for t in rows}
+    symbols = {}
+    if asset_ids:
+        for a in db.execute(select(Asset).where(Asset.id.in_(asset_ids))).scalars():
+            symbols[a.id] = a.symbol
+    return [{
+        "id": t.id,
+        "wallet_id": t.wallet_id,
+        "asset_id": t.asset_id,
+        "asset_symbol": symbols.get(t.asset_id),
+        "type": t.type,
+        "quantity": str(t.quantity),
+        "price": str(t.price),
+        "fee": str(t.fee),
+        "fee_currency": t.fee_currency,
+        "fee_usdt": str(t.fee_usdt),
+        "date_utc": t.date_utc.replace(microsecond=0).isoformat() + "Z",
+    } for t in rows]
+
+
 @app.post("/api/transactions", status_code=201)
 def create_transaction(payload: TransactionIn, db: Session = Depends(get_db)):
     tx = add_transaction(

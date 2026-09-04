@@ -75,3 +75,28 @@ export function averagePrice(totalCost: Numeric, totalQuantity: Numeric): string
   if (qty.isZero()) return "0";
   return toDecimal(totalCost).div(qty).toString();
 }
+
+/** Alias de UI: importe USDT con separadores. */
+export function formatCurrency(value: Numeric, decimals = 2): string {
+  return formatMoney(value, decimals);
+}
+
+/** Alias de UI: cantidad de cripto. */
+export function formatQuantity(value: Numeric, decimals = 8): string {
+  return formatCrypto(value, decimals);
+}
+
+/** Formatea un porcentaje (p. ej. ROI / asignación) con 2 decimales. */
+export function formatPercentage(value: Numeric | null | undefined, decimals = 2): string {
+  if (value === null || value === undefined || value === "") return "—";
+  const d = toDecimal(value).toDecimalPlaces(decimals, Decimal.ROUND_HALF_UP);
+  return `${d.toFixed(decimals)}%`;
+}
+
+/** Signo de un valor numérico para colorear PnL/ROI en la UI. */
+export function getSign(value: Numeric | null | undefined): "positive" | "negative" | "zero" {
+  if (value === null || value === undefined || value === "") return "zero";
+  const d = toDecimal(value);
+  if (d.isZero()) return "zero";
+  return d.isPositive() ? "positive" : "negative";
+}
