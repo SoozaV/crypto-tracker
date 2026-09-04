@@ -1,0 +1,24 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+
+# --- Secretos y BD local (tarea 0.2) ---
+.env
+*.db
+*.sqlite
+*.sqlite3
+
+# --- Frontend ---
+node_modules/
+dist/
+.vite/
+
+# --- Editores / SO ---
+.vscode/
+.idea/
+.DS_Store

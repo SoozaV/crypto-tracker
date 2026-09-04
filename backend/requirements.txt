@@ -1,0 +1,18 @@
+# --- Núcleo backend (tarea 0.3) ---
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+SQLAlchemy==2.0.36
+alembic==1.14.0
+python-dotenv==1.0.1
+requests==2.32.3
+pandas==2.2.3
+# --- Fase 2 (se usan más adelante; se dejan listos) ---
+tenacity==9.0.0        # reintentos con backoff para llamadas a APIs (tarea 2.6)
+APScheduler==3.11.0    # cron job de OHLCV diario (tarea 4.2)
+
+# --- Fase 6 (seguridad) ---
+slowapi==0.1.9         # rate limiting (tarea 6.3)
+
+# --- Testing (tarea 1.10) ---
+pytest==8.3.4
+httpx==0.28.1        # TestClient para tests de endpoints

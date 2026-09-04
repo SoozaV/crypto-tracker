@@ -1,0 +1,22 @@
+{
+  "name": "crypto-portfolio-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "test:decimal": "tsx src/utils/decimalHelper.test.ts"
+  },
+  "dependencies": {
+    "decimal.js": "^10.4.3",
+    "lightweight-charts": "^4.2.1",
+    "recharts": "^2.13.3",
+    "axios": "^1.7.9",
+    "technicalindicators": "^3.1.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2"
+  }
+}
