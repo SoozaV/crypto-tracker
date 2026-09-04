@@ -1,48 +1,29 @@
-import React, { useEffect, useState } from 'react';
-import { getWallets } from '../services/api';
+import React from 'react';
 import type { Wallet } from '../types';
 
-interface WalletSelectorProps {
+interface Props {
+  wallets: Wallet[];
   selectedWalletId?: number;
   onWalletChange: (id: number | undefined) => void;
 }
 
-const WalletSelector: React.FC<WalletSelectorProps> = ({ selectedWalletId, onWalletChange }) => {
-  const [wallets, setWallets] = useState<Wallet[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    getWallets()
-      .then(setWallets)
-      .catch(console.error)
-      .finally(() => setLoading(false));
-  }, []);
-
-  if (loading) {
-    return <div className="w-48 h-10 bg-gray-200 dark:bg-gray-700 rounded-lg animate-pulse"></div>;
-  }
-
-  if (wallets.length === 0) {
-    return (
-      <div className="text-sm text-yellow-600 dark:text-yellow-400">
-        Sin wallets. Usa Setup.
-      </div>
-    );
-  }
-
+const WalletSelector: React.FC<Props> = ({ wallets, selectedWalletId, onWalletChange }) => {
   return (
-    <select
-      value={selectedWalletId ?? 'all'}
-      onChange={(e) => onWalletChange(e.target.value === 'all' ? undefined : Number(e.target.value))}
-      className="px-4 py-2 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 outline-none transition"
-    >
-      <option value="all">Todas</option>
-      {wallets.map((w) => (
-        <option key={w.id} value={w.id}>
-          {w.name} ({w.type})
-        </option>
-      ))}
-    </select>
+    <div className="inline-flex items-center rounded-xl border border-line bg-surface">
+      <span className="pl-3 pr-1 text-xs text-muted">Scope</span>
+      <select
+        value={selectedWalletId ?? 'all'}
+        onChange={(e) => onWalletChange(e.target.value === 'all' ? undefined : Number(e.target.value))}
+        className="num cursor-pointer rounded-xl bg-transparent py-2 pl-1 pr-3 text-sm text-ink outline-none focus:ring-2 focus:ring-accent/40"
+      >
+        <option value="all">Todas las wallets</option>
+        {wallets.map((w) => (
+          <option key={w.id} value={w.id}>
+            {w.name} · {w.type}
+          </option>
+        ))}
+      </select>
+    </div>
   );
 };
 

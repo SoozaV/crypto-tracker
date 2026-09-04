@@ -1,78 +1,111 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { createChart, LineStyle, type IChartApi, type UTCTimestamp } from 'lightweight-charts';
-import { getAssetDetail, getOhlcv } from '../services/api';
+import { getAssetDetail, getOhlcv, refreshPriceHistory } from '../services/api';
 import type { AssetDetail as AssetDetailType, OhlcvCandle } from '../types';
-import { formatCurrency, formatQuantity, formatPercentage, getSign, toDecimal } from '../utils/decimalHelper';
+import {
+  formatCurrency,
+  formatQuantity,
+  formatPercentage,
+  toDecimal,
+} from '../utils/decimalHelper';
+import { useTheme } from '../theme';
+import { Card, SectionLabel, ChangeChip, signClass, Spinner } from './ui';
 
-interface AssetDetailProps {
+interface Props {
   walletId?: number;
 }
-
 interface DetailWithCandles extends AssetDetailType {
   candles: OhlcvCandle[];
 }
 
-const AssetDetail: React.FC<AssetDetailProps> = ({ walletId }) => {
+/**
+ * Lee un token de color del tema (formato "R G B") y lo devuelve como
+ * rgb(R, G, B). Ojo: Lightweight Charts NO parsea la sintaxis con espacios
+ * `rgb(15 23 42)`; necesita comas, de ahí el split/join.
+ */
+function cssRgb(varName: string): string {
+  const v = getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
+  if (!v) return '#888888';
+  const parts = v.split(/\s+/);
+  return parts.length === 3 ? `rgb(${parts.join(', ')})` : v;
+}
+
+const PERIODS = [7, 30, 90, 365];
+
+const AssetDetail: React.FC<Props> = ({ walletId }) => {
   const { assetId } = useParams<{ assetId: string }>();
-  const chartContainerRef = useRef<HTMLDivElement>(null);
+  const { theme } = useTheme();
+  const chartRef = useRef<HTMLDivElement>(null);
   const [detail, setDetail] = useState<DetailWithCandles | null>(null);
   const [loading, setLoading] = useState(true);
   const [days, setDays] = useState(30);
   const [error, setError] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
 
-  useEffect(() => {
+  const load = useCallback(async () => {
     if (!assetId) return;
-
-    const fetchData = async () => {
-      try {
-        setLoading(true);
-        const [det, ohlcv] = await Promise.all([
-          getAssetDetail(Number(assetId), walletId),
-          getOhlcv(Number(assetId), days),
-        ]);
-        setDetail({ ...det, candles: ohlcv.candles });
-        setError(null);
-      } catch (err) {
-        console.error('Error fetching asset detail:', err);
-        setError('Error al cargar los datos del activo');
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchData();
+    try {
+      setLoading(true);
+      const [det, ohlcv] = await Promise.all([
+        getAssetDetail(Number(assetId), walletId),
+        getOhlcv(Number(assetId), days),
+      ]);
+      setDetail({ ...det, candles: ohlcv.candles });
+      setError(null);
+    } catch {
+      setError('No se pudo cargar el activo.');
+    } finally {
+      setLoading(false);
+    }
   }, [assetId, walletId, days]);
 
   useEffect(() => {
-    if (!chartContainerRef.current || !detail?.candles?.length) return;
+    load();
+  }, [load]);
 
-    const container = chartContainerRef.current;
+  const doRefreshHistory = async () => {
+    if (!assetId) return;
+    setRefreshing(true);
+    try {
+      await refreshPriceHistory(Math.max(days, 200));
+      await load();
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  // Gráfico: se reconstruye cuando cambian los datos o el tema.
+  useEffect(() => {
+    if (!chartRef.current || !detail?.candles?.length) return;
+    const container = chartRef.current;
     container.innerHTML = '';
 
+    const textColor = cssRgb('--text');
+    const gridColor = cssRgb('--border');
+    const gain = cssRgb('--gain');
+    const loss = cssRgb('--loss');
+    const accent = cssRgb('--accent');
+
     const chart: IChartApi = createChart(container, {
-      layout: {
-        background: { color: 'transparent' },
-        textColor: '#6B7280',
-      },
-      grid: {
-        vertLines: { color: '#E5E7EB' },
-        horzLines: { color: '#E5E7EB' },
-      },
-      width: container.clientWidth,
-      height: 400,
-      timeScale: {
-        timeVisible: true,
-        secondsVisible: false,
-      },
+      layout: { background: { color: 'transparent' }, textColor },
+      // Locale explícito: no dependemos del locale del sistema (que en algunos
+      // entornos es inválido y rompería el formateo del eje de tiempo).
+      localization: { locale: 'es-ES' },
+      grid: { vertLines: { color: gridColor }, horzLines: { color: gridColor } },
+      rightPriceScale: { borderColor: gridColor },
+      timeScale: { borderColor: gridColor, timeVisible: false },
+      width: container.clientWidth || 600,
+      height: 380,
+      crosshair: { horzLine: { labelBackgroundColor: accent }, vertLine: { labelBackgroundColor: accent } },
     });
 
     const candleSeries = chart.addCandlestickSeries({
-      upColor: '#10B981',
-      downColor: '#EF4444',
+      upColor: gain,
+      downColor: loss,
+      wickUpColor: gain,
+      wickDownColor: loss,
       borderVisible: false,
-      wickUpColor: '#10B981',
-      wickDownColor: '#EF4444',
     });
 
     const candleData = detail.candles.map((c) => ({
@@ -84,139 +117,131 @@ const AssetDetail: React.FC<AssetDetailProps> = ({ walletId }) => {
     }));
     candleSeries.setData(candleData);
 
-    if (detail.avg_price && !toDecimal(detail.avg_price).isZero()) {
-      const avgPrice = Number(toDecimal(detail.avg_price).toString());
-      const avgLineSeries = chart.addLineSeries({
-        color: '#F59E0B',
+    // Línea de coste promedio del usuario (ámbar), superpuesta al precio.
+    if (detail.avg_price && !toDecimal(detail.avg_price).isZero() && candleData.length) {
+      const avg = Number(toDecimal(detail.avg_price).toString());
+      const avgSeries = chart.addLineSeries({
+        color: accent,
         lineWidth: 2,
         lineStyle: LineStyle.Dashed,
-        priceLineVisible: true,
-        priceLineColor: '#F59E0B',
-        priceLineWidth: 2,
-        title: 'Tu Precio Prom.',
+        priceLineVisible: false,
+        lastValueVisible: true,
+        title: 'Tu prom.',
       });
-      avgLineSeries.setData(candleData.map((d) => ({ time: d.time, value: avgPrice })));
+      avgSeries.setData(candleData.map((d) => ({ time: d.time, value: avg })));
     }
 
     chart.timeScale().fitContent();
 
-    const handleResize = () => {
-      chart.applyOptions({ width: container.clientWidth });
-    };
-    window.addEventListener('resize', handleResize);
-
+    // ResizeObserver: mantiene el ancho sincronizado aunque el contenedor cambie
+    // de tamaño por el layout (más fiable que el evento 'resize' de la ventana).
+    const ro = new ResizeObserver(() => {
+      const w = container.clientWidth;
+      if (w > 0) chart.applyOptions({ width: w });
+    });
+    ro.observe(container);
     return () => {
-      window.removeEventListener('resize', handleResize);
+      ro.disconnect();
       chart.remove();
     };
-  }, [detail]);
+  }, [detail, theme]);
 
-  if (loading) {
+  if (loading && !detail) {
     return (
       <div className="animate-pulse space-y-4">
-        <div className="h-10 bg-gray-200 dark:bg-gray-700 rounded w-1/4"></div>
-        <div className="h-96 bg-gray-200 dark:bg-gray-700 rounded"></div>
+        <div className="h-8 w-40 rounded bg-surface2" />
+        <div className="h-96 rounded-2xl bg-surface2" />
       </div>
     );
   }
-
   if (error || !detail) {
-    return (
-      <div className="bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 p-4 rounded-xl">
-        {error || 'Activo no encontrado'}
-      </div>
-    );
+    return <Card className="p-5 text-sm text-loss">{error ?? 'Activo no encontrado.'}</Card>;
   }
 
-  const pnlSign = getSign(detail.unrealized_pnl);
-  const changeClass = (value: string | null | undefined) => {
-    const sign = getSign(value);
-    if (sign === 'zero') return 'text-gray-500';
-    return sign === 'positive' ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400';
-  };
+  const stats: Array<{ k: string; v: string; cls?: string }> = [
+    { k: 'Cantidad', v: formatQuantity(detail.quantity, detail.decimals ?? 8) },
+    { k: 'Tu precio prom.', v: formatCurrency(detail.avg_price), cls: 'text-accent' },
+    { k: 'Precio actual', v: detail.price_now != null ? formatCurrency(detail.price_now) : '—' },
+    { k: 'Valor', v: formatCurrency(detail.value) },
+    { k: 'Coste', v: formatCurrency(detail.cost_basis) },
+    { k: 'PnL no realizado', v: formatCurrency(detail.unrealized_pnl), cls: signClass(detail.unrealized_pnl) },
+    { k: 'PnL realizado', v: formatCurrency(detail.realized_pnl), cls: signClass(detail.realized_pnl) },
+    { k: 'ROI (tu rendimiento)', v: formatPercentage(detail.roi_pct), cls: signClass(detail.roi_pct) },
+    { k: 'Asignación', v: formatPercentage(detail.allocation_pct) },
+  ];
 
   return (
-    <div>
-      <Link to="/" className="text-blue-600 dark:text-blue-400 hover:underline mb-4 inline-block">
+    <div className="space-y-5">
+      <Link to="/" className="inline-flex items-center gap-1 text-sm text-muted hover:text-ink">
         ← Volver al portafolio
       </Link>
 
-      <div className="bg-white dark:bg-gray-800 p-6 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 mb-6">
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-          <div>
-            <h2 className="text-2xl font-bold text-gray-900 dark:text-white">
-              {detail.symbol.toUpperCase()}
-            </h2>
-            <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-              Cantidad: {formatQuantity(detail.quantity, detail.decimals ?? 8)} |{' '}
-              Promedio: {formatCurrency(detail.avg_price)}
-            </p>
+      {/* Cabecera del activo */}
+      <Card className="p-5">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <span className="num flex h-10 w-10 items-center justify-center rounded-xl bg-accent/10 text-sm font-semibold text-accent">
+              {detail.symbol.slice(0, 3).toUpperCase()}
+            </span>
+            <div>
+              <h2 className="text-xl font-semibold text-ink">{detail.symbol.toUpperCase()}</h2>
+              {detail.name && <p className="text-sm text-muted">{detail.name}</p>}
+            </div>
           </div>
-          <div className="text-right">
-            <p className="text-lg font-bold text-gray-900 dark:text-white">
-              {detail.price_now != null ? formatCurrency(detail.price_now) : '—'}
-            </p>
-            <p
-              className={`text-sm font-medium ${
-                pnlSign === 'positive'
-                  ? 'text-green-600'
-                  : pnlSign === 'negative'
-                    ? 'text-red-600'
-                    : 'text-gray-500'
-              }`}
+          <div className="flex flex-col items-end gap-1">
+            <span className="text-[0.7rem] text-muted">Mercado (precio)</span>
+            <div className="flex items-center gap-2">
+              <ChangeChip value={detail.changes?.change_24h_pct} label="24h" />
+              <ChangeChip value={detail.changes?.change_7d_pct} label="7d" />
+              <ChangeChip value={detail.changes?.change_30d_pct} label="30d" />
+            </div>
+          </div>
+        </div>
+
+        <p className="mt-3 text-xs text-muted">
+          <span className="text-ink">Mercado</span> = cuánto se movió el precio del activo en cada ventana (igual para todos).{' '}
+          <span className="text-ink">Tu ROI</span> = tu rendimiento según tu coste promedio. Son cosas distintas.
+        </p>
+
+        <dl className="mt-5 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
+          {stats.map((s) => (
+            <div key={s.k}>
+              <dt className="text-xs text-muted">{s.k}</dt>
+              <dd className={`num mt-0.5 text-sm font-medium ${s.cls ?? 'text-ink'}`}>{s.v}</dd>
+            </div>
+          ))}
+        </dl>
+      </Card>
+
+      {/* Gráfico */}
+      <Card className="p-4">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+          <SectionLabel>Precio y tu coste promedio</SectionLabel>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={doRefreshHistory}
+              disabled={refreshing}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-line px-2.5 py-1 text-xs text-muted hover:text-ink disabled:opacity-50"
             >
-              {formatCurrency(detail.unrealized_pnl)} ({formatPercentage(detail.roi_pct)})
-            </p>
+              {refreshing ? <Spinner /> : '↻'} Actualizar velas
+            </button>
+            <div className="flex rounded-lg border border-line p-0.5">
+              {PERIODS.map((d) => (
+                <button
+                  key={d}
+                  onClick={() => setDays(d)}
+                  className={`num rounded-md px-2.5 py-1 text-xs transition-colors ${
+                    days === d ? 'bg-accent text-white' : 'text-muted hover:text-ink'
+                  }`}
+                >
+                  {d}d
+                </button>
+              ))}
+            </div>
           </div>
         </div>
-
-        {detail.changes && (
-          <div className="grid grid-cols-3 gap-4 mt-6 pt-4 border-t border-gray-200 dark:border-gray-700">
-            <div>
-              <p className="text-xs text-gray-500 dark:text-gray-400 uppercase">24h</p>
-              <p className={`text-sm font-mono font-medium ${changeClass(detail.changes.change_24h_pct)}`}>
-                {formatPercentage(detail.changes.change_24h_pct)}
-              </p>
-            </div>
-            <div>
-              <p className="text-xs text-gray-500 dark:text-gray-400 uppercase">7d</p>
-              <p className={`text-sm font-mono font-medium ${changeClass(detail.changes.change_7d_pct)}`}>
-                {formatPercentage(detail.changes.change_7d_pct)}
-              </p>
-            </div>
-            <div>
-              <p className="text-xs text-gray-500 dark:text-gray-400 uppercase">30d</p>
-              <p className={`text-sm font-mono font-medium ${changeClass(detail.changes.change_30d_pct)}`}>
-                {formatPercentage(detail.changes.change_30d_pct)}
-              </p>
-            </div>
-          </div>
-        )}
-      </div>
-
-      <div className="bg-white dark:bg-gray-800 p-4 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700">
-        <div className="flex justify-between items-center mb-4">
-          <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-            Histórico (OHLCV)
-          </h3>
-          <div className="flex gap-2">
-            {[7, 30, 90, 365].map((d) => (
-              <button
-                key={d}
-                onClick={() => setDays(d)}
-                className={`px-3 py-1 text-xs rounded transition ${
-                  days === d
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600'
-                }`}
-              >
-                {d}d
-              </button>
-            ))}
-          </div>
-        </div>
-        <div ref={chartContainerRef} className="w-full h-[400px]" />
-      </div>
+        <div ref={chartRef} className="h-[380px] w-full" />
+      </Card>
     </div>
   );
 };

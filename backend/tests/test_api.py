@@ -134,3 +134,50 @@ def test_ohlcv_endpoint_serves_raw_candles(client, monkeypatch):
     assert body["candles"][0]["close"] == "105"          # orden ascendente
     assert body["candles"][-1]["close"] == "121"
     assert body["candles"][0]["timestamp"].startswith("2025-01-01")
+
+
+def test_delete_transaction_recalculates(client):
+    client.post("/api/setup", json={
+        "wallet_name": "Binance", "symbol": "BTC", "quantity": "1",
+        "total_cost": "40000", "coingecko_id": "bitcoin",
+        "date": "2026-01-01T00:00:00+00:00",
+    })
+    wid = client.get("/api/wallets").json()[0]["id"]
+    aid = client.get("/api/assets").json()[0]["id"]
+    # Segunda compra: 1 BTC @ 60000 -> avg 50000, qty 2
+    client.post("/api/transactions", json={
+        "wallet_id": wid, "asset_id": aid, "type": "BUY",
+        "quantity": "1", "price": "60000", "date": "2026-02-01T00:00:00+00:00",
+    })
+    txs = client.get("/api/transactions").json()
+    assert len(txs) == 2
+    second = next(t for t in txs if t["price"] == "60000")
+
+    # Borrar la segunda compra -> vuelve a qty 1, avg 40000
+    r = client.delete(f"/api/transactions/{second['id']}")
+    assert r.status_code == 200
+    d = client.get(f"/api/asset/{aid}").json()
+    assert d["quantity"] == "1"
+    assert d["avg_price"] == "40000"
+
+
+def test_delete_blocked_when_it_breaks_sequence(client):
+    client.post("/api/setup", json={
+        "wallet_name": "Binance", "symbol": "BTC", "quantity": "1",
+        "total_cost": "40000", "coingecko_id": "bitcoin",
+        "date": "2026-01-01T00:00:00+00:00",
+    })
+    wid = client.get("/api/wallets").json()[0]["id"]
+    aid = client.get("/api/assets").json()[0]["id"]
+    # Vendemos 1 BTC (queda 0)
+    client.post("/api/transactions", json={
+        "wallet_id": wid, "asset_id": aid, "type": "SELL",
+        "quantity": "1", "price": "60000", "date": "2026-03-01T00:00:00+00:00",
+    })
+    # Intentar borrar la compra inicial -> la venta quedaría sin respaldo -> 400
+    txs = client.get("/api/transactions").json()
+    buy = next(t for t in txs if t["type"] == "DEPOSIT" or t["type"] == "BUY")
+    r = client.delete(f"/api/transactions/{buy['id']}")
+    assert r.status_code == 400
+    # No se borró nada: siguen las 2 transacciones
+    assert len(client.get("/api/transactions").json()) == 2

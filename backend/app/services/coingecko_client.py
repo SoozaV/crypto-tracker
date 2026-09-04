@@ -117,3 +117,63 @@ def get_market_data(coingecko_id: str, use_cache: bool = True) -> dict[str, Any]
     if use_cache:
         return price_cache.get_or_set(cache_key, _fetch)
     return _fetch()
+
+
+# Lista completa de monedas de CoinGecko (id, symbol, name). Se descarga UNA vez
+# y se cachea muchas horas; el buscador filtra sobre ella en local para NO llamar
+# a la API por cada tecla (clave para no agotar el rate limit del plan gratuito).
+_COINS_LIST_TTL = 12 * 3600
+
+
+def _get_coins_list() -> list[dict]:
+    return price_cache.get_or_set(
+        "coingecko:coins_list",
+        lambda: _get("/coins/list", {}),
+        ttl_seconds=_COINS_LIST_TTL,
+    )
+
+
+def search_coins(query: str, use_cache: bool = True) -> list[dict]:
+    """
+    Autocompletar de monedas filtrando en LOCAL sobre `/coins/list` (cacheada).
+    Devuelve candidatas con su coingecko_id real para que el usuario ELIJA en vez
+    de escribirlo a mano (evita el caso 'símbolo BTC con id de otra moneda').
+    Orden: símbolo exacto, símbolo que empieza por, nombre que empieza por, y
+    finalmente coincidencias parciales.
+    """
+    q = (query or "").strip().lower()
+    if len(q) < 2:
+        return []
+
+    coins = _get_coins_list() if use_cache else _get("/coins/list", {})
+
+    scored: list[tuple[int, int, dict]] = []
+    for c in coins:
+        sym = (c.get("symbol") or "").lower()
+        name = (c.get("name") or "").lower()
+        cid = (c.get("id") or "").lower()
+        if sym == q:
+            score = 0
+        elif sym.startswith(q):
+            score = 1
+        elif name.startswith(q):
+            score = 2
+        elif q in name:
+            score = 3
+        elif q in sym or q in cid:
+            score = 4
+        else:
+            continue
+        scored.append((score, len(name), c))
+
+    scored.sort(key=lambda t: (t[0], t[1]))
+    out = []
+    for _, __, c in scored[:15]:
+        out.append({
+            "id": c.get("id"),
+            "symbol": (c.get("symbol") or "").upper(),
+            "name": c.get("name"),
+            "market_cap_rank": None,
+            "thumb": None,
+        })
+    return out

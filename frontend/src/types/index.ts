@@ -13,12 +13,17 @@ export interface AssetCatalog {
   binance_symbol: string | null;
 }
 
-export interface PriceChanges {
-  symbol: string;
-  price: string | null;
+/** Cambios porcentuales que acompañan a cada activo (3.6). */
+export interface AssetChanges {
   change_24h_pct: string | null;
   change_7d_pct: string | null;
   change_30d_pct: string | null;
+}
+
+/** Respuesta completa de /asset/{id}/changes (incluye símbolo y precio). */
+export interface PriceChanges extends AssetChanges {
+  symbol: string;
+  price: string | null;
 }
 
 /** Fila de activo dentro de /portfolio/summary o /asset/{id}. */
@@ -39,7 +44,7 @@ export interface AssetDetail {
   decimals?: number;
   scope?: string;
   wallet_id?: number | null;
-  changes?: PriceChanges;
+  changes?: AssetChanges | null;
 }
 
 export interface PortfolioSummary {
@@ -93,4 +98,13 @@ export interface OhlcvResponse {
   symbol: string;
   days: number;
   candles: OhlcvCandle[];
+}
+
+/** Resultado del autocompletar de monedas (CoinGecko /search). */
+export interface CoinSearchResult {
+  id: string;
+  symbol: string;
+  name: string | null;
+  market_cap_rank: number | null;
+  thumb: string | null;
 }

@@ -1,154 +1,127 @@
-import React, { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { getPortfolioSummary } from '../services/api';
-import type { AssetDetail } from '../types';
-import { formatQuantity, formatCurrency, formatPercentage, getSign, toDecimal } from '../utils/decimalHelper';
+import React from 'react';
+import { useNavigate } from 'react-router-dom';
+import type { PortfolioSummary, AssetDetail } from '../types';
+import { formatQuantity, formatCurrency, formatPercentage, toDecimal } from '../utils/decimalHelper';
+import { Card, SectionLabel, ChangeChip, signClass } from './ui';
 
-interface AssetListProps {
-  walletId?: number;
+interface Props {
+  summary: PortfolioSummary | null;
+  loading: boolean;
+  error: string | null;
 }
 
-const AssetList: React.FC<AssetListProps> = ({ walletId }) => {
-  const [assets, setAssets] = useState<AssetDetail[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+const AssetList: React.FC<Props> = ({ summary, loading, error }) => {
+  const navigate = useNavigate();
 
-  const fetchData = async () => {
-    try {
-      setLoading(true);
-      const summary = await getPortfolioSummary(walletId);
-      const held = summary.assets.filter((a) => !toDecimal(a.quantity).isZero());
-      setAssets(held);
-      setError(null);
-    } catch (err) {
-      console.error('Error fetching assets:', err);
-      setError('Error al cargar los activos');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchData();
-  }, [walletId]);
-
-  const getColor = (value: string | null) => {
-    const sign = getSign(value);
-    if (sign === 'zero') return 'text-gray-500';
-    return sign === 'positive' ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400';
-  };
-
-  const getBg = (value: string | null) => {
-    const sign = getSign(value);
-    if (sign === 'zero') return 'bg-gray-100 dark:bg-gray-800';
-    return sign === 'positive' ? 'bg-green-50 dark:bg-green-900/30' : 'bg-red-50 dark:bg-red-900/30';
-  };
-
-  if (loading) {
+  if (loading && !summary) {
     return (
-      <div className="animate-pulse space-y-3">
-        <div className="h-14 bg-gray-200 dark:bg-gray-700 rounded-lg"></div>
-        <div className="h-14 bg-gray-200 dark:bg-gray-700 rounded-lg"></div>
-        <div className="h-14 bg-gray-200 dark:bg-gray-700 rounded-lg"></div>
-      </div>
+      <Card className="animate-pulse p-4">
+        <div className="mb-3 h-4 w-32 rounded bg-surface2" />
+        {[0, 1, 2].map((i) => (
+          <div key={i} className="mb-2 h-12 rounded-lg bg-surface2" />
+        ))}
+      </Card>
     );
   }
+  if (error && !summary) return <Card className="p-5 text-sm text-loss">{error}</Card>;
+  if (!summary) return null;
 
-  if (error) {
-    return (
-      <div className="bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 p-4 rounded-xl">
-        {error}
-      </div>
-    );
-  }
+  const held = summary.assets.filter((a) => !toDecimal(a.quantity).isZero());
 
-  if (assets.length === 0) {
+  if (held.length === 0) {
     return (
-      <div className="bg-gray-50 dark:bg-gray-800/50 border border-dashed border-gray-300 dark:border-gray-600 rounded-xl p-8 text-center text-gray-500 dark:text-gray-400">
-        <p className="text-lg">No tienes activos en esta wallet</p>
-        <p className="text-sm mt-1">Agrega una transacción de compra o depósito para comenzar</p>
-      </div>
+      <Card className="p-10 text-center">
+        <p className="text-ink">Aún no hay posiciones en este scope</p>
+        <p className="mt-1 text-sm text-muted">
+          Registra una compra o depósito abajo, o usa la configuración inicial.
+        </p>
+      </Card>
     );
   }
 
   return (
-    <div className="overflow-x-auto bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700">
-      <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
-        <thead className="bg-gray-50 dark:bg-gray-900/50">
-          <tr>
-            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-              Activo
-            </th>
-            <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-              Cantidad
-            </th>
-            <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-              Precio Prom.
-            </th>
-            <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-              Precio Actual
-            </th>
-            <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-              PnL (USDT)
-            </th>
-            <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-              ROI
-            </th>
-            <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-              % Portafolio
-            </th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
-          {assets.map((asset) => (
-            <tr
-              key={asset.asset_id}
-              className="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition"
-            >
-              <td className="px-6 py-4 whitespace-nowrap">
-                <Link to={`/asset/${asset.asset_id}`} className="flex items-center group">
-                  <div className="flex-shrink-0 h-8 w-8 bg-blue-100 dark:bg-blue-900/50 rounded-full flex items-center justify-center text-blue-600 dark:text-blue-300 font-bold text-xs">
-                    {asset.symbol.substring(0, 3).toUpperCase()}
-                  </div>
-                  <div className="ml-3">
-                    <p className="text-sm font-medium text-gray-900 dark:text-white group-hover:text-blue-600 dark:group-hover:text-blue-400">
-                      {asset.symbol.toUpperCase()}
-                    </p>
-                    {asset.name && (
-                      <p className="text-xs text-gray-500 dark:text-gray-400">{asset.name}</p>
-                    )}
-                  </div>
-                </Link>
-              </td>
-              <td className="px-6 py-4 whitespace-nowrap text-right text-sm text-gray-900 dark:text-white font-mono">
-                {formatQuantity(asset.quantity, asset.decimals ?? 8)}
-              </td>
-              <td className="px-6 py-4 whitespace-nowrap text-right text-sm text-gray-600 dark:text-gray-300 font-mono">
-                {formatCurrency(asset.avg_price)}
-              </td>
-              <td className="px-6 py-4 whitespace-nowrap text-right text-sm text-gray-600 dark:text-gray-300 font-mono">
-                {asset.price_now != null ? formatCurrency(asset.price_now) : '—'}
-              </td>
-              <td
-                className={`px-6 py-4 whitespace-nowrap text-right text-sm font-mono font-medium ${getColor(asset.unrealized_pnl)}`}
-              >
-                <span className={`px-2 py-1 rounded ${getBg(asset.unrealized_pnl)}`}>
-                  {formatCurrency(asset.unrealized_pnl)}
-                </span>
-              </td>
-              <td
-                className={`px-6 py-4 whitespace-nowrap text-right text-sm font-mono font-medium ${getColor(asset.roi_pct)}`}
-              >
-                {formatPercentage(asset.roi_pct)}
-              </td>
-              <td className="px-6 py-4 whitespace-nowrap text-right text-sm text-gray-600 dark:text-gray-300 font-mono">
-                {formatPercentage(asset.allocation_pct)}
-              </td>
+    <Card className="overflow-hidden">
+      <div className="flex items-center justify-between border-b border-line px-4 py-3">
+        <SectionLabel>Posiciones</SectionLabel>
+        <span className="num text-xs text-muted">{held.length} activos</span>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="min-w-full text-sm">
+          <thead>
+            <tr className="text-left text-xs text-muted">
+              <th className="py-2 pl-4 pr-3 font-medium">Activo</th>
+              <th className="px-3 py-2 text-right font-medium">Cantidad</th>
+              <th className="px-3 py-2 text-right font-medium">Tu prom.</th>
+              <th className="px-3 py-2 text-right font-medium">Precio</th>
+              <th className="px-3 py-2 text-right font-medium" title="Cambio del precio de mercado del activo en las últimas 24h (igual para todos, fuente CoinGecko)">
+                Mercado 24h
+              </th>
+              <th className="px-3 py-2 text-right font-medium" title="Ganancia/pérdida no realizada de tu posición (precio actual − tu coste)">
+                Tu PnL
+              </th>
+              <th className="px-3 py-2 text-right font-medium" title="Tu rendimiento: (precio actual − tu precio promedio) / tu precio promedio">
+                Tu ROI
+              </th>
+              <th className="py-2 pl-3 pr-4 text-right font-medium">Asignación</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+          </thead>
+          <tbody>
+            {held.map((a: AssetDetail) => {
+              const alloc = Number(a.allocation_pct);
+              return (
+                <tr
+                  key={a.asset_id}
+                  onClick={() => navigate(`/asset/${a.asset_id}`)}
+                  className="cursor-pointer border-t border-line/60 transition-colors hover:bg-surface2"
+                >
+                  <td className="py-3 pl-4 pr-3">
+                    <div className="flex items-center gap-3">
+                      <span className="num flex h-7 items-center justify-center rounded-lg bg-accent/10 px-2 text-xs font-semibold text-accent">
+                        {a.symbol.toUpperCase()}
+                      </span>
+                      <span className="text-sm text-ink">{a.name ?? a.symbol.toUpperCase()}</span>
+                    </div>
+                  </td>
+                  <td className="num px-3 py-3 text-right text-ink">
+                    {formatQuantity(a.quantity, a.decimals ?? 8)}
+                  </td>
+                  {/* Precio promedio del usuario en ámbar: el mismo color que su
+                      línea de coste en el gráfico de velas. */}
+                  <td className="num px-3 py-3 text-right text-accent">
+                    {formatCurrency(a.avg_price)}
+                  </td>
+                  <td className="num px-3 py-3 text-right text-ink">
+                    {a.price_now != null ? formatCurrency(a.price_now) : '—'}
+                  </td>
+                  <td className="px-3 py-3 text-right">
+                    <ChangeChip value={a.changes?.change_24h_pct} />
+                  </td>
+                  <td className={`num px-3 py-3 text-right ${signClass(a.unrealized_pnl)}`}>
+                    {formatCurrency(a.unrealized_pnl)}
+                  </td>
+                  <td className={`num px-3 py-3 text-right ${signClass(a.roi_pct)}`}>
+                    {formatPercentage(a.roi_pct)}
+                  </td>
+                  <td className="py-3 pl-3 pr-4">
+                    <div className="flex items-center justify-end gap-2">
+                      <div className="h-1.5 w-16 overflow-hidden rounded-full bg-surface2">
+                        <div
+                          className="h-full rounded-full bg-accent"
+                          style={{ width: `${Math.min(alloc, 100)}%` }}
+                        />
+                      </div>
+                      <span className="num w-12 text-right text-xs text-muted">
+                        {formatPercentage(a.allocation_pct)}
+                      </span>
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </Card>
   );
 };
 

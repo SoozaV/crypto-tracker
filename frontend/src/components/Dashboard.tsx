@@ -1,89 +1,74 @@
-import React, { useEffect, useState } from 'react';
-import { getPortfolioSummary } from '../services/api';
+import React from 'react';
 import type { PortfolioSummary } from '../types';
-import { formatCurrency, formatPercentage, getSign } from '../utils/decimalHelper';
+import { formatCurrency, formatPercentage } from '../utils/decimalHelper';
+import { Card, signClass } from './ui';
 
-interface DashboardProps {
-  walletId?: number;
+interface Props {
+  summary: PortfolioSummary | null;
+  loading: boolean;
+  error: string | null;
 }
 
-const Dashboard: React.FC<DashboardProps> = ({ walletId }) => {
-  const [summary, setSummary] = useState<PortfolioSummary | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  const fetchData = async () => {
-    try {
-      setLoading(true);
-      const data = await getPortfolioSummary(walletId);
-      setSummary(data);
-      setError(null);
-    } catch {
-      setError('Error al cargar el resumen');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchData();
-  }, [walletId]);
-
-  if (loading) {
+const Dashboard: React.FC<Props> = ({ summary, loading, error }) => {
+  if (loading && !summary) {
     return (
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6 animate-pulse">
-        <div className="h-28 bg-gray-200 dark:bg-gray-700 rounded-xl"></div>
-        <div className="h-28 bg-gray-200 dark:bg-gray-700 rounded-xl"></div>
-        <div className="h-28 bg-gray-200 dark:bg-gray-700 rounded-xl"></div>
+      <div className="grid animate-pulse gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {[0, 1, 2, 3].map((i) => (
+          <div key={i} className="h-28 rounded-2xl bg-surface2" />
+        ))}
       </div>
     );
   }
 
-  if (error || !summary) {
+  if (error && !summary) {
     return (
-      <div className="bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 p-4 rounded-xl mb-6">
-        {error || 'Sin datos disponibles'}
-      </div>
+      <Card className="p-5 text-sm text-loss">{error}</Card>
     );
   }
+  if (!summary) return null;
 
-  const getColorClass = (value: string | null) => {
-    const sign = getSign(value);
-    if (sign === 'zero') return 'text-gray-500';
-    return sign === 'positive' ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400';
-  };
+  const scopeLabel = summary.scope === 'wallet' ? 'Wallet seleccionada' : 'Todas las wallets';
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-      <div className="bg-white dark:bg-gray-800 p-5 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700">
-        <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-          Valor Total
-        </h3>
-        <p className="text-2xl font-bold text-gray-900 dark:text-white mt-1">
+    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      {/* Valor total: la cifra protagonista del panel. */}
+      <Card className="p-5 lg:col-span-1 sm:col-span-2">
+        <p className="text-xs text-muted">Valor del portafolio</p>
+        <p className="num mt-1 text-3xl font-semibold text-ink">
           {formatCurrency(summary.total_value)}
         </p>
-      </div>
+        <p className="mt-1 text-xs text-muted">{scopeLabel}</p>
+      </Card>
 
-      <div className="bg-white dark:bg-gray-800 p-5 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700">
-        <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-          PnL Total (No realizado)
-        </h3>
-        <p className={`text-2xl font-bold mt-1 ${getColorClass(summary.total_unrealized_pnl)}`}>
+      <Card className="p-5">
+        <p className="text-xs text-muted">PnL no realizado</p>
+        <p className={`num mt-1 text-2xl font-semibold ${signClass(summary.total_unrealized_pnl)}`}>
           {formatCurrency(summary.total_unrealized_pnl)}
         </p>
-        <p className="text-sm text-gray-500 dark:text-gray-400">
-          Realizado: {formatCurrency(summary.total_realized_pnl)}
+        <p className="num mt-1 text-xs text-muted">
+          Realizado {formatCurrency(summary.total_realized_pnl)}
         </p>
-      </div>
+      </Card>
 
-      <div className="bg-white dark:bg-gray-800 p-5 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700">
-        <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-          ROI Total
-        </h3>
-        <p className={`text-2xl font-bold mt-1 ${getColorClass(summary.total_roi_pct)}`}>
+      <Card className="p-5">
+        <p className="text-xs text-muted">ROI total</p>
+        <p className={`num mt-1 text-2xl font-semibold ${signClass(summary.total_roi_pct)}`}>
           {formatPercentage(summary.total_roi_pct)}
         </p>
-      </div>
+        <p className="num mt-1 text-xs text-muted">
+          Coste {formatCurrency(summary.total_cost_basis)}
+        </p>
+      </Card>
+
+      <Card className="p-5">
+        <p className="text-xs text-muted">Activos con posición</p>
+        <p className="num mt-1 text-2xl font-semibold text-ink">
+          {summary.assets.filter((a) => Number(a.quantity) > 0).length}
+        </p>
+        <p className="num mt-1 text-xs text-muted">
+          {summary.assets.length} en catálogo del scope
+        </p>
+      </Card>
     </div>
   );
 };

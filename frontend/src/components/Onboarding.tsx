@@ -1,177 +1,166 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { setupInitialBalance } from '../services/api';
+import type { Wallet } from '../types';
+import { Card } from './ui';
+import AssetPicker, { type PickedCoin } from './AssetPicker';
 
-interface OnboardingProps {
+interface Props {
+  wallets: Wallet[];
   onComplete: () => void;
 }
 
-const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
+const field =
+  'w-full rounded-lg border border-line bg-surface2 px-3 py-2 text-sm text-ink outline-none focus:ring-2 focus:ring-accent/40 placeholder:text-muted';
+
+const NEW = '__new__';
+
+/**
+ * "Cargar posición inicial": crea/reutiliza una wallet y registra el saldo de
+ * partida de una cripto como un DEPÓSITO. Pensado para el primer uso o para
+ * añadir una moneda nueva al catálogo.
+ */
+const Onboarding: React.FC<Props> = ({ wallets, onComplete }) => {
   const navigate = useNavigate();
-  const [form, setForm] = useState({
-    wallet_name: 'Mi Wallet',
-    symbol: 'BTC',
-    quantity: '',
-    total_cost: '',
-    decimals: 8,
-    wallet_type: 'EXCHANGE',
-    coingecko_id: 'bitcoin',
-    binance_symbol: 'BTCUSDT',
-  });
+  const [walletChoice, setWalletChoice] = useState<string>(wallets[0] ? String(wallets[0].id) : NEW);
+  const [newWalletName, setNewWalletName] = useState('');
+  const [newWalletType, setNewWalletType] = useState('EXCHANGE');
+  const [coin, setCoin] = useState<PickedCoin | null>(null);
+  const [quantity, setQuantity] = useState('');
+  const [totalCost, setTotalCost] = useState('');
+  const [decimals, setDecimals] = useState(8);
+  const [advanced, setAdvanced] = useState(false);
+  const [binance, setBinance] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!form.quantity || !form.total_cost) {
-      setError('Completa cantidad y coste total');
-      return;
-    }
+  const isNew = walletChoice === NEW;
+  const walletName = isNew ? newWalletName.trim() : wallets.find((w) => String(w.id) === walletChoice)?.name ?? '';
+  const hasCoin = !!coin?.symbol;
 
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!walletName) return setError('Indica el nombre de la nueva wallet.');
+    if (!hasCoin) return setError('Busca y elige la moneda.');
+    if (!quantity || !totalCost) return setError('Indica cantidad y coste total.');
     try {
       setLoading(true);
       await setupInitialBalance({
-        wallet_name: form.wallet_name,
-        symbol: form.symbol,
-        quantity: form.quantity,
-        total_cost: form.total_cost,
-        decimals: form.decimals,
-        wallet_type: form.wallet_type,
-        coingecko_id: form.coingecko_id || undefined,
-        binance_symbol: form.binance_symbol || undefined,
+        wallet_name: walletName,
+        wallet_type: isNew ? newWalletType : undefined,
+        symbol: coin!.symbol,
+        name: coin!.name,
+        coingecko_id: coin!.coingecko_id,
+        binance_symbol: (binance || coin!.binance_symbol) || undefined,
+        quantity,
+        total_cost: totalCost,
+        decimals,
       });
       setError(null);
       onComplete();
     } catch (err: unknown) {
-      const axiosErr = err as { response?: { data?: { detail?: string } } };
-      setError(axiosErr.response?.data?.detail || 'Error al configurar el balance inicial');
+      const ax = err as { response?: { data?: { detail?: string } } };
+      setError(ax.response?.data?.detail ?? 'No se pudo guardar la posición inicial.');
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="max-w-md mx-auto mt-10 bg-white dark:bg-gray-800 p-8 rounded-xl shadow-lg border border-gray-200 dark:border-gray-700">
-      <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">
-        Configuración Inicial
-      </h2>
-      <p className="text-sm text-gray-500 dark:text-gray-400 mb-6">
-        Ingresa tu primera wallet y depósito inicial.
-      </p>
+    <div className="mx-auto max-w-lg">
+      <Card className="p-7">
+        <h2 className="text-xl font-semibold text-ink">Cargar posición inicial</h2>
+        <p className="mt-1 text-sm text-muted">
+          Registra una cripto y su saldo de partida en una wallet. Se guarda como un
+          <span className="text-ink"> depósito</span>. Úsalo la primera vez o cuando
+          añadas una moneda nueva. Todo es local y con precisión Decimal.
+        </p>
 
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <div>
-          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-            Nombre de Wallet
-          </label>
-          <input
-            type="text"
-            value={form.wallet_name}
-            onChange={(e) => setForm({ ...form, wallet_name: e.target.value })}
-            className="w-full px-4 py-2 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 outline-none"
-            required
-          />
-        </div>
+        <form onSubmit={submit} className="mt-5 space-y-4">
+          {/* Wallet: existente o nueva */}
+          <div className="space-y-1">
+            <span className="text-xs text-muted">Wallet</span>
+            <select value={walletChoice} onChange={(e) => setWalletChoice(e.target.value)} className={field}>
+              {wallets.map((w) => (
+                <option key={w.id} value={w.id}>{w.name} · {w.type}</option>
+              ))}
+              <option value={NEW}>➕ Crear wallet nueva…</option>
+            </select>
+          </div>
 
-        <div>
-          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-            Símbolo (ej. BTC, ETH)
-          </label>
-          <input
-            type="text"
-            value={form.symbol}
-            onChange={(e) => setForm({ ...form, symbol: e.target.value.toUpperCase() })}
-            className="w-full px-4 py-2 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 outline-none"
-            required
-          />
-        </div>
+          {isNew && (
+            <div className="grid grid-cols-2 gap-3">
+              <label className="space-y-1">
+                <span className="text-xs text-muted">Nombre de la nueva wallet</span>
+                <input value={newWalletName} onChange={(e) => setNewWalletName(e.target.value)} placeholder="Binance, Ledger…" className={field} />
+              </label>
+              <label className="space-y-1">
+                <span className="text-xs text-muted">Tipo</span>
+                <select value={newWalletType} onChange={(e) => setNewWalletType(e.target.value)} className={field}>
+                  <option value="EXCHANGE">Exchange</option>
+                  <option value="COLD">Cartera fría</option>
+                  <option value="HOT">Cartera caliente</option>
+                  <option value="OTHER">Otra</option>
+                </select>
+              </label>
+            </div>
+          )}
 
-        <div>
-          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-            Cantidad
-          </label>
-          <input
-            type="number"
-            step="any"
-            placeholder="0.5"
-            value={form.quantity}
-            onChange={(e) => setForm({ ...form, quantity: e.target.value })}
-            className="w-full px-4 py-2 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 outline-none"
-            required
-          />
-        </div>
+          {/* Moneda: buscador */}
+          <div className="space-y-1">
+            <span className="text-xs text-muted">Moneda</span>
+            <AssetPicker value={coin} onPick={setCoin} />
+          </div>
 
-        <div>
-          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-            Coste total (USDT)
-          </label>
-          <input
-            type="number"
-            step="any"
-            placeholder="25000"
-            value={form.total_cost}
-            onChange={(e) => setForm({ ...form, total_cost: e.target.value })}
-            className="w-full px-4 py-2 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 outline-none"
-            required
-          />
-        </div>
+          <div className="grid grid-cols-2 gap-3">
+            <label className="space-y-1">
+              <span className="text-xs text-muted">Cantidad</span>
+              <input type="number" step="any" placeholder="0.5" value={quantity} onChange={(e) => setQuantity(e.target.value)} className={`num ${field}`} />
+            </label>
+            <label className="space-y-1">
+              <span className="text-xs text-muted">Coste total (USDT)</span>
+              <input type="number" step="any" placeholder="25000" value={totalCost} onChange={(e) => setTotalCost(e.target.value)} className={`num ${field}`} />
+            </label>
+          </div>
 
-        <div>
-          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-            Decimales (ej. 8 para BTC, 18 para ETH)
-          </label>
-          <input
-            type="number"
-            placeholder="8"
-            value={form.decimals}
-            onChange={(e) => setForm({ ...form, decimals: Number(e.target.value) })}
-            className="w-full px-4 py-2 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 outline-none"
-          />
-        </div>
+          <button type="button" onClick={() => setAdvanced((a) => !a)} className="text-xs text-muted hover:text-ink">
+            {advanced ? '▾' : '▸'} Opciones avanzadas
+          </button>
+          {advanced && (
+            <div className="grid grid-cols-2 gap-3 rounded-lg border border-line p-3">
+              <label className="space-y-1">
+                <span className="text-xs text-muted">Decimales (solo display)</span>
+                <input type="number" value={decimals} onChange={(e) => setDecimals(Number(e.target.value))} className={`num ${field}`} />
+              </label>
+              <label className="space-y-1">
+                <span className="text-xs text-muted">Par de Binance (velas)</span>
+                <input value={binance} onChange={(e) => setBinance(e.target.value.toUpperCase())} placeholder={coin?.binance_symbol ?? 'BTCUSDT'} className={`num ${field}`} />
+              </label>
+            </div>
+          )}
 
-        <div>
-          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-            CoinGecko ID (opcional)
-          </label>
-          <input
-            type="text"
-            placeholder="bitcoin"
-            value={form.coingecko_id}
-            onChange={(e) => setForm({ ...form, coingecko_id: e.target.value })}
-            className="w-full px-4 py-2 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 outline-none"
-          />
-        </div>
+          {hasCoin && quantity && totalCost && walletName && (
+            <p className="rounded-lg bg-surface2 px-3 py-2 text-xs text-muted">
+              Se registrará un <span className="text-ink">depósito</span> de{' '}
+              <span className="num text-ink">{quantity} {coin!.symbol}</span> por{' '}
+              <span className="num text-ink">{totalCost} USDT</span> en{' '}
+              <span className="text-ink">{walletName}</span>
+              {isNew ? ' (wallet nueva)' : ''}.
+            </p>
+          )}
 
-        <div>
-          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-            Binance symbol (opcional)
-          </label>
-          <input
-            type="text"
-            placeholder="BTCUSDT"
-            value={form.binance_symbol}
-            onChange={(e) => setForm({ ...form, binance_symbol: e.target.value.toUpperCase() })}
-            className="w-full px-4 py-2 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 outline-none"
-          />
-        </div>
+          {error && <p className="text-sm text-loss">{error}</p>}
 
-        <button
-          type="submit"
-          disabled={loading}
-          className="w-full py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 transition"
-        >
-          {loading ? 'Guardando...' : 'Guardar y empezar'}
-        </button>
-
-        {error && <div className="text-red-600 text-sm">{error}</div>}
-      </form>
-
-      <button
-        onClick={() => navigate('/')}
-        className="mt-4 text-sm text-gray-500 hover:underline"
-      >
-        Omitir (ir al dashboard)
-      </button>
+          <div className="flex items-center gap-3">
+            <button type="submit" disabled={loading} className="rounded-lg bg-accent px-5 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50">
+              {loading ? 'Guardando…' : 'Guardar posición'}
+            </button>
+            <button type="button" onClick={() => navigate('/')} className="text-sm text-muted hover:text-ink">
+              Volver
+            </button>
+          </div>
+        </form>
+      </Card>
     </div>
   );
 };

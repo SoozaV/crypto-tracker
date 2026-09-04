@@ -7,6 +7,7 @@ import type {
   Transaction,
   TransactionCreate,
   OhlcvResponse,
+  CoinSearchResult,
 } from '../types';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
@@ -52,6 +53,16 @@ export const createTransaction = async (data: TransactionCreate): Promise<Transa
   return res.data;
 };
 
+export const deleteTransaction = async (id: number): Promise<{ deleted: number }> => {
+  const res = await api.delete(`/transactions/${id}`);
+  return res.data;
+};
+
+export const searchCoins = async (q: string): Promise<CoinSearchResult[]> => {
+  const res = await api.get('/coins/search', { params: { q } });
+  return res.data;
+};
+
 export const setupInitialBalance = async (payload: {
   wallet_name: string;
   symbol: string;
@@ -70,6 +81,12 @@ export const setupInitialBalance = async (payload: {
 
 export const getOhlcv = async (assetId: number, days: number = 30): Promise<OhlcvResponse> => {
   const res = await api.get(`/asset/${assetId}/ohlcv`, { params: { days } });
+  return res.data;
+};
+
+/** Fuerza la actualización del histórico OHLCV (mismo trabajo que el cron diario). */
+export const refreshPriceHistory = async (days: number = 200): Promise<unknown> => {
+  const res = await api.post('/admin/refresh-prices', null, { params: { days } });
   return res.data;
 };
 

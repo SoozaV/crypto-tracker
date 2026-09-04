@@ -62,3 +62,19 @@ def test_rate_limit_returns_429(make_client):
     codes = [client.get("/api/health").status_code for _ in range(4)]
     assert codes[:3] == [200, 200, 200]   # las 3 primeras pasan
     assert codes[3] == 429                 # la 4ª supera el límite
+
+
+def test_cors_preflight_allows_delete(make_client):
+    """El preflight de DELETE desde el origen permitido debe pasar (200) e incluir
+    DELETE en los métodos permitidos. (Regresión: el DELETE de transacciones
+    fallaba porque CORS no listaba el método.)"""
+    client = make_client()
+    r = client.options(
+        "/api/transactions/1",
+        headers={
+            "Origin": "http://localhost:5173",
+            "Access-Control-Request-Method": "DELETE",
+        },
+    )
+    assert r.status_code == 200
+    assert "DELETE" in (r.headers.get("access-control-allow-methods") or "")

@@ -1,127 +1,87 @@
-import React, { useEffect, useState } from 'react';
-import { getPortfolioSummary } from '../services/api';
-import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer } from 'recharts';
-import { formatPercentage, toDecimal } from '../utils/decimalHelper';
+import React from 'react';
+import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from 'recharts';
+import type { PortfolioSummary } from '../types';
+import { formatPercentage, formatCurrency, toDecimal } from '../utils/decimalHelper';
+import { Card, SectionLabel } from './ui';
 
-interface AllocationChartProps {
-  walletId?: number;
+interface Props {
+  summary: PortfolioSummary | null;
+  loading: boolean;
 }
 
-const COLORS = [
-  '#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6',
-  '#EC4899', '#14B8A6', '#F97316', '#6366F1', '#06B6D4',
-];
+const COLORS = ['#E0A542', '#3B82F6', '#26A69A', '#A78BFA', '#F472B6', '#22D3EE', '#F97316', '#84CC16'];
 
-interface ChartRow {
-  name: string;
-  value: number;
-  percentage: string;
-  color: string;
-}
-
-const AllocationChart: React.FC<AllocationChartProps> = ({ walletId }) => {
-  const [data, setData] = useState<ChartRow[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  const fetchData = async () => {
-    try {
-      setLoading(true);
-      const summary = await getPortfolioSummary(walletId);
-
-      const chartData = summary.assets
-        .filter((d) => toDecimal(d.allocation_pct).greaterThan(0))
-        .map((d, index) => ({
-          name: d.symbol.toUpperCase(),
-          value: Number(toDecimal(d.allocation_pct).toString()),
-          percentage: formatPercentage(d.allocation_pct),
-          color: COLORS[index % COLORS.length],
-        }));
-
-      setData(chartData);
-      setError(null);
-    } catch (err) {
-      console.error('Error fetching allocation data:', err);
-      setError('Error al cargar los datos de asignación');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchData();
-  }, [walletId]);
-
-  if (loading) {
-    return <div className="w-full h-64 bg-gray-200 dark:bg-gray-700 rounded-xl animate-pulse"></div>;
+const AllocationChart: React.FC<Props> = ({ summary, loading }) => {
+  if (loading && !summary) {
+    return <Card className="h-full min-h-[320px] animate-pulse bg-surface2" />;
   }
+  if (!summary) return null;
 
-  if (error) {
-    return (
-      <div className="bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 p-4 rounded-xl">
-        {error}
-      </div>
-    );
-  }
-
-  if (data.length === 0) {
-    return (
-      <div className="w-full h-64 bg-gray-50 dark:bg-gray-800/50 border border-dashed border-gray-300 dark:border-gray-600 rounded-xl flex items-center justify-center text-gray-500 dark:text-gray-400">
-        <p className="text-center">No hay datos de asignación</p>
-      </div>
-    );
-  }
-
-  const CustomTooltip = ({ active, payload }: { active?: boolean; payload?: Array<{ payload: ChartRow }> }) => {
-    if (active && payload && payload.length) {
-      const item = payload[0].payload;
-      return (
-        <div className="bg-white dark:bg-gray-800 p-3 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700">
-          <p className="font-medium text-gray-900 dark:text-white">{item.name}</p>
-          <p className="text-sm text-gray-600 dark:text-gray-300">{item.percentage} del portafolio</p>
-        </div>
-      );
-    }
-    return null;
-  };
+  const data = summary.assets
+    .filter((d) => toDecimal(d.allocation_pct).greaterThan(0))
+    .map((d, i) => ({
+      name: d.symbol.toUpperCase(),
+      value: Number(d.allocation_pct),
+      valueUsd: d.value,
+      pct: formatPercentage(d.allocation_pct),
+      color: COLORS[i % COLORS.length],
+    }));
 
   return (
-    <div className="bg-white dark:bg-gray-800 p-4 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700">
-      <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-4">
-        Distribución del Portafolio
-      </h3>
-      <ResponsiveContainer width="100%" height={280}>
-        <PieChart>
-          <Pie
-            data={data}
-            cx="50%"
-            cy="50%"
-            labelLine={false}
-            outerRadius={90}
-            fill="#8884d8"
-            dataKey="value"
-          >
-            {data.map((entry, index) => (
-              <Cell key={`cell-${index}`} fill={entry.color} />
+    <Card className="flex h-full flex-col p-4">
+      <SectionLabel>Distribución</SectionLabel>
+      {data.length === 0 ? (
+        <div className="flex flex-1 items-center justify-center py-10 text-center text-sm text-muted">
+          Sin datos de asignación todavía
+        </div>
+      ) : (
+        <>
+          <div className="mt-2">
+            <ResponsiveContainer width="100%" height={180}>
+              <PieChart>
+                <Pie
+                  data={data}
+                  cx="50%"
+                  cy="50%"
+                  innerRadius={52}
+                  outerRadius={80}
+                  paddingAngle={2}
+                  dataKey="value"
+                  stroke="none"
+                >
+                  {data.map((e, i) => (
+                    <Cell key={i} fill={e.color} />
+                  ))}
+                </Pie>
+                <Tooltip
+                  content={({ active, payload }) => {
+                    if (!active || !payload?.length) return null;
+                    const p = payload[0].payload as (typeof data)[number];
+                    return (
+                      <div className="rounded-lg border border-line bg-surface px-3 py-2 text-xs shadow-lg">
+                        <p className="font-medium text-ink">{p.name}</p>
+                        <p className="num text-muted">{p.pct} · {formatCurrency(p.valueUsd)}</p>
+                      </div>
+                    );
+                  }}
+                />
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+          <ul className="mt-3 space-y-1.5">
+            {data.map((e) => (
+              <li key={e.name} className="flex items-center justify-between text-xs">
+                <span className="flex items-center gap-2 text-ink">
+                  <span className="h-2.5 w-2.5 rounded-sm" style={{ background: e.color }} />
+                  {e.name}
+                </span>
+                <span className="num text-muted">{e.pct}</span>
+              </li>
             ))}
-          </Pie>
-          <Tooltip content={<CustomTooltip />} />
-          <Legend
-            layout="vertical"
-            verticalAlign="middle"
-            align="right"
-            formatter={(value, entry) => {
-              const percentage = (entry.payload as ChartRow | undefined)?.percentage ?? '';
-              return `${value} (${percentage})`;
-            }}
-            wrapperStyle={{
-              fontSize: '12px',
-              color: '#6B7280',
-            }}
-          />
-        </PieChart>
-      </ResponsiveContainer>
-    </div>
+          </ul>
+        </>
+      )}
+    </Card>
   );
 };
 

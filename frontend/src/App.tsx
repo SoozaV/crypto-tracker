@@ -1,5 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { BrowserRouter, Routes, Route, Link, useNavigate } from 'react-router-dom';
+import { ThemeProvider, useTheme } from './theme';
+import { usePortfolioSummary, useCatalog } from './hooks/usePortfolio';
 import Dashboard from './components/Dashboard';
 import WalletSelector from './components/WalletSelector';
 import AssetList from './components/AssetList';
@@ -8,62 +10,108 @@ import AssetDetail from './components/AssetDetail';
 import TransactionForm from './components/TransactionForm';
 import TransactionHistory from './components/TransactionHistory';
 import Onboarding from './components/Onboarding';
+import { Spinner } from './components/ui';
+import { formatClock } from './utils/format';
 
-function AppContent() {
-  const [selectedWalletId, setSelectedWalletId] = useState<number | undefined>(undefined);
+function ThemeToggle() {
+  const { theme, toggle } = useTheme();
+  return (
+    <button
+      onClick={toggle}
+      aria-label="Cambiar tema"
+      className="rounded-xl border border-line bg-surface px-3 py-2 text-sm text-muted hover:text-ink"
+    >
+      {theme === 'dark' ? '☀︎' : '☾'}
+    </button>
+  );
+}
+
+function AppShell() {
   const navigate = useNavigate();
+  const [walletId, setWalletId] = useState<number | undefined>(undefined);
   const [refreshKey, setRefreshKey] = useState(0);
 
+  const catalog = useCatalog(refreshKey);
+  const portfolio = usePortfolioSummary(walletId, refreshKey);
+
+  const bump = () => setRefreshKey((k) => k + 1);
+
+  // Refresco automático cada 5 minutos (tarea 5.12). Refresca EN SITIO vía
+  // refreshKey; ya no remonta los componentes (sin parpadeo de skeletons).
   useEffect(() => {
-    const interval = setInterval(() => setRefreshKey(prev => prev + 1), 5 * 60 * 1000);
-    return () => clearInterval(interval);
+    const id = setInterval(bump, 5 * 60 * 1000);
+    return () => clearInterval(id);
   }, []);
 
+  const updated = portfolio.updatedAt ? formatClock(portfolio.updatedAt) : null;
+
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900 transition-colors">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-8">
-          <div className="flex items-center gap-4">
-            <Link to="/" className="text-2xl font-bold text-gray-900 dark:text-white flex items-center gap-2">
-              🪙 Crypto Tracker
-              <span className="text-sm font-normal text-gray-500 dark:text-gray-400 ml-2">v0.2</span>
+    <div className="min-h-screen">
+      <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
+        {/* Cabecera */}
+        <header className="mb-6 flex flex-wrap items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <Link to="/" className="flex items-center gap-2 text-lg font-semibold text-ink">
+              <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent/15 text-accent">◈</span>
+              Crypto Tracker
             </Link>
-            <button
-              onClick={() => navigate('/onboarding')}
-              className="text-xs bg-gray-200 dark:bg-gray-700 px-2 py-1 rounded text-gray-600 dark:text-gray-300 hover:bg-gray-300"
-            >
-              ⚙️ Setup
-            </button>
+            <span className="num rounded-md bg-surface2 px-1.5 py-0.5 text-[0.7rem] text-muted">spot · USDT</span>
           </div>
-          <WalletSelector selectedWalletId={selectedWalletId} onWalletChange={setSelectedWalletId} />
-        </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            {catalog.wallets.length > 0 ? (
+              <WalletSelector wallets={catalog.wallets} selectedWalletId={walletId} onWalletChange={setWalletId} />
+            ) : (
+              <Link to="/onboarding" className="rounded-xl border border-accent/40 bg-accent/10 px-3 py-2 text-sm text-accent">
+                Configura tu primera wallet →
+              </Link>
+            )}
+            <button
+              onClick={() => portfolio.reload()}
+              className="inline-flex items-center gap-2 rounded-xl border border-line bg-surface px-3 py-2 text-sm text-muted hover:text-ink"
+              title={updated ? `Actualizado a las ${updated}` : 'Actualizar'}
+            >
+              {portfolio.loading ? <Spinner /> : '↻'}
+              <span className="num hidden sm:inline">{updated ?? '—'}</span>
+            </button>
+            <Link to="/onboarding" className="rounded-xl border border-line bg-surface px-3 py-2 text-sm text-muted hover:text-ink">
+              Setup
+            </Link>
+            <ThemeToggle />
+          </div>
+        </header>
 
         <Routes>
-          <Route path="/" element={
-            <>
-              <Dashboard key={refreshKey} walletId={selectedWalletId} />
-              <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 mt-6">
-                <div className="lg:col-span-3">
-                  <AssetList key={refreshKey} walletId={selectedWalletId} />
+          <Route
+            path="/"
+            element={
+              <div className="space-y-6">
+                <Dashboard summary={portfolio.summary} loading={portfolio.loading} error={portfolio.error} />
+                <div className="grid gap-6 lg:grid-cols-3">
+                  <div className="lg:col-span-2">
+                    <AssetList summary={portfolio.summary} loading={portfolio.loading} error={portfolio.error} />
+                  </div>
+                  <AllocationChart summary={portfolio.summary} loading={portfolio.loading} />
                 </div>
-                <div className="lg:col-span-1">
-                  <AllocationChart key={refreshKey} walletId={selectedWalletId} />
-                </div>
+                <TransactionForm
+                  wallets={catalog.wallets}
+                  assets={catalog.assets}
+                  walletId={walletId}
+                  onSuccess={bump}
+                />
+                <TransactionHistory walletId={walletId} wallets={catalog.wallets} assets={catalog.assets} refreshKey={refreshKey} onChanged={bump} />
               </div>
-              <div className="mt-6">
-                <TransactionForm walletId={selectedWalletId} onSuccess={() => setRefreshKey(prev => prev + 1)} />
-              </div>
-              <div className="mt-6">
-                <TransactionHistory key={refreshKey} walletId={selectedWalletId} />
-              </div>
-            </>
-          } />
-          <Route path="/asset/:assetId" element={<AssetDetail walletId={selectedWalletId} />} />
-          <Route path="/onboarding" element={<Onboarding onComplete={() => { navigate('/'); setRefreshKey(prev => prev + 1); }} />} />
+            }
+          />
+          <Route path="/asset/:assetId" element={<AssetDetail walletId={walletId} />} />
+          <Route
+            path="/onboarding"
+            element={<Onboarding wallets={catalog.wallets} onComplete={() => { bump(); navigate('/'); }} />}
+          />
         </Routes>
 
-        <footer className="mt-8 text-center text-xs text-gray-400 dark:text-gray-600 border-t border-gray-200 dark:border-gray-800 pt-4">
-          Datos en tiempo real vía CoinGecko · Precios en USDT · Precisión con Decimal.js
+        <footer className="mt-10 border-t border-line pt-5 text-center text-xs text-muted">
+          Local y privado · Precios en tiempo real vía CoinGecko · Velas de Binance · Precisión con Decimal.js
         </footer>
       </div>
     </div>
@@ -72,8 +120,10 @@ function AppContent() {
 
 export default function App() {
   return (
-    <BrowserRouter>
-      <AppContent />
-    </BrowserRouter>
+    <ThemeProvider>
+      <BrowserRouter>
+        <AppShell />
+      </BrowserRouter>
+    </ThemeProvider>
   );
 }

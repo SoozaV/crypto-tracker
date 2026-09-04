@@ -1,212 +1,196 @@
 import React, { useEffect, useState } from 'react';
-import { getAssetCatalog, getWallets, createTransaction, getAssetDetail } from '../services/api';
+import { createTransaction, getAssetDetail } from '../services/api';
 import type { AssetCatalog, TransactionCreate, Wallet } from '../types';
-import { toDecimal } from '../utils/decimalHelper';
+import { toDecimal, safeDiv, formatCurrency, formatQuantity } from '../utils/decimalHelper';
+import { Card, SectionLabel } from './ui';
 
-interface TransactionFormProps {
+interface Props {
+  wallets: Wallet[];
+  assets: AssetCatalog[];
   walletId?: number;
   onSuccess: () => void;
 }
 
-const TransactionForm: React.FC<TransactionFormProps> = ({ walletId, onSuccess }) => {
-  const [wallets, setWallets] = useState<Wallet[]>([]);
-  const [assets, setAssets] = useState<AssetCatalog[]>([]);
+const field =
+  'w-full rounded-lg border border-line bg-surface2 px-3 py-2 text-sm text-ink outline-none focus:ring-2 focus:ring-accent/40 placeholder:text-muted';
+
+/**
+ * Modelo de entrada simple: CANTIDAD (en cripto) + TOTAL (en USDT).
+ * - Compra/Depósito: total = lo que pagaste (fees incluidos) → es el coste base.
+ * - Venta: total = lo que recibiste (neto de fees) → son las ganancias.
+ * - Retiro: no lleva total (solo reduce cantidad y coste proporcional).
+ * El precio unitario se deriva como total / cantidad y se envía al backend con
+ * fee = 0 (el fee ya está dentro del total). Exacto para el ACB.
+ */
+const TransactionForm: React.FC<Props> = ({ wallets, assets, walletId, onSuccess }) => {
   const [form, setForm] = useState({
-    wallet_id: walletId || 0,
+    wallet_id: walletId ?? 0,
     asset_id: 0,
     type: 'BUY' as TransactionCreate['type'],
     quantity: '',
-    price: '',
-    fee: '0',
-    fee_currency: 'USDT',
-    fee_usdt: '0',
+    total: '',
     date: new Date().toISOString().slice(0, 16),
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [balance, setBalance] = useState<string | null>(null);
-  const [balanceLoading, setBalanceLoading] = useState(false);
 
   useEffect(() => {
-    Promise.all([getWallets(), getAssetCatalog()])
-      .then(([w, a]) => {
-        setWallets(w);
-        setAssets(a);
-        setForm((prev) => ({
-          ...prev,
-          wallet_id: prev.wallet_id || walletId || (w[0]?.id ?? 0),
-          asset_id: prev.asset_id || (a[0]?.id ?? 0),
-        }));
-      })
-      .catch(console.error);
-  }, []);
+    setForm((p) => ({
+      ...p,
+      wallet_id: p.wallet_id || walletId || wallets[0]?.id || 0,
+      asset_id: p.asset_id || assets[0]?.id || 0,
+    }));
+  }, [wallets, assets, walletId]);
+
+  const reduces = form.type === 'SELL' || form.type === 'WITHDRAWAL';
+  const needsTotal = form.type !== 'WITHDRAWAL';
 
   useEffect(() => {
-    if (walletId) {
-      setForm((prev) => ({ ...prev, wallet_id: walletId }));
-    }
-  }, [walletId]);
-
-  useEffect(() => {
-    if ((form.type === 'SELL' || form.type === 'WITHDRAWAL') && form.asset_id && form.wallet_id) {
-      setBalanceLoading(true);
+    if (reduces && form.asset_id && form.wallet_id) {
       getAssetDetail(form.asset_id, form.wallet_id)
-        .then((detail) => setBalance(detail.quantity))
-        .catch(() => setBalance(null))
-        .finally(() => setBalanceLoading(false));
+        .then((d) => setBalance(d.quantity))
+        .catch(() => setBalance(null));
     } else {
       setBalance(null);
-      setBalanceLoading(false);
     }
-  }, [form.asset_id, form.wallet_id, form.type]);
+  }, [reduces, form.asset_id, form.wallet_id]);
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  // Precio unitario derivado (solo informativo en la UI).
+  const unitPrice =
+    needsTotal && form.total && form.quantity && !toDecimal(form.quantity).isZero()
+      ? safeDiv(form.total, form.quantity)
+      : null;
+
+  const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!form.wallet_id || !form.asset_id || !form.quantity || !form.price) {
-      setError('Completa todos los campos obligatorios');
+    if (!form.wallet_id || !form.asset_id || !form.quantity) {
+      setError('Faltan campos: wallet, activo y cantidad.');
       return;
     }
-
-    if ((form.type === 'SELL' || form.type === 'WITHDRAWAL') && balance !== null) {
-      if (toDecimal(form.quantity).greaterThan(toDecimal(balance))) {
-        setError(`No tienes suficiente saldo. Disponible: ${balance}`);
-        return;
-      }
+    if (needsTotal && !form.total) {
+      setError('Indica el total en USDT.');
+      return;
     }
-
+    if (reduces && balance !== null && toDecimal(form.quantity).greaterThan(toDecimal(balance))) {
+      setError(`No hay saldo suficiente. Disponible: ${formatQuantity(balance)}.`);
+      return;
+    }
     try {
       setLoading(true);
-      const payload: TransactionCreate = {
+      const price = needsTotal ? safeDiv(form.total, form.quantity) : '0';
+      await createTransaction({
         wallet_id: form.wallet_id,
         asset_id: form.asset_id,
         type: form.type,
         quantity: form.quantity,
-        price: form.price,
-        fee: form.fee || '0',
-        fee_currency: form.fee_currency || 'USDT',
-        fee_usdt: form.fee_usdt || '0',
+        price,
+        fee: '0',
+        fee_currency: 'USDT',
+        fee_usdt: '0',
         date: new Date(form.date).toISOString(),
-      };
-      await createTransaction(payload);
+      });
       setError(null);
-      setForm((prev) => ({ ...prev, quantity: '', price: '', fee: '0', fee_usdt: '0' }));
+      setForm((p) => ({ ...p, quantity: '', total: '' }));
       onSuccess();
     } catch (err: unknown) {
-      const axiosErr = err as { response?: { data?: { detail?: string } } };
-      setError(axiosErr.response?.data?.detail || 'Error al crear transacción');
+      const ax = err as { response?: { data?: { detail?: string } } };
+      setError(ax.response?.data?.detail ?? 'No se pudo registrar la transacción.');
     } finally {
       setLoading(false);
     }
   };
 
+  const types: Array<{ v: TransactionCreate['type']; label: string }> = [
+    { v: 'BUY', label: 'Compra' },
+    { v: 'SELL', label: 'Venta' },
+    { v: 'DEPOSIT', label: 'Depósito' },
+    { v: 'WITHDRAWAL', label: 'Retiro' },
+  ];
+
+  const totalLabel =
+    form.type === 'SELL' ? 'Total recibido (USDT, neto de fees)' : 'Total pagado (USDT, fees incluidos)';
+
   return (
-    <div className="bg-white dark:bg-gray-800 p-6 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700">
-      <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-4">
-        Nueva Transacción
-      </h3>
-      <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <select
-          value={form.wallet_id}
-          onChange={(e) => setForm({ ...form, wallet_id: Number(e.target.value) })}
-          className="px-3 py-2 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 outline-none"
-          required
-        >
-          <option value="0">Wallet</option>
-          {wallets.map((w) => (
-            <option key={w.id} value={w.id}>
-              {w.name}
-            </option>
+    <Card className="p-5">
+      <SectionLabel>Nueva transacción</SectionLabel>
+      <form onSubmit={submit} className="mt-3 space-y-3">
+        <div className="inline-flex rounded-lg border border-line p-0.5">
+          {types.map((t) => (
+            <button
+              key={t.v}
+              type="button"
+              onClick={() => setForm({ ...form, type: t.v })}
+              className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+                form.type === t.v ? 'bg-accent text-white' : 'text-muted hover:text-ink'
+              }`}
+            >
+              {t.label}
+            </button>
           ))}
-        </select>
+        </div>
 
-        <select
-          value={form.asset_id}
-          onChange={(e) => setForm({ ...form, asset_id: Number(e.target.value) })}
-          className="px-3 py-2 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 outline-none"
-          required
-        >
-          <option value="0">Activo</option>
-          {assets.map((a) => (
-            <option key={a.id} value={a.id}>
-              {a.symbol}
-            </option>
-          ))}
-        </select>
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          <label className="space-y-1">
+            <span className="text-xs text-muted">Wallet</span>
+            <select value={form.wallet_id} onChange={(e) => setForm({ ...form, wallet_id: Number(e.target.value) })} className={field}>
+              <option value={0}>Elige wallet</option>
+              {wallets.map((w) => (
+                <option key={w.id} value={w.id}>{w.name}</option>
+              ))}
+            </select>
+          </label>
 
-        <select
-          value={form.type}
-          onChange={(e) =>
-            setForm({ ...form, type: e.target.value as TransactionCreate['type'] })
-          }
-          className="px-3 py-2 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 outline-none"
-        >
-          <option value="BUY">Compra</option>
-          <option value="SELL">Venta</option>
-          <option value="DEPOSIT">Depósito</option>
-          <option value="WITHDRAWAL">Retiro</option>
-        </select>
+          <label className="space-y-1">
+            <span className="text-xs text-muted">Activo</span>
+            <select value={form.asset_id} onChange={(e) => setForm({ ...form, asset_id: Number(e.target.value) })} className={field}>
+              <option value={0}>Elige activo</option>
+              {assets.map((a) => (
+                <option key={a.id} value={a.id}>{a.symbol}</option>
+              ))}
+            </select>
+          </label>
 
-        <input
-          type="number"
-          step="any"
-          placeholder="Cantidad"
-          value={form.quantity}
-          onChange={(e) => setForm({ ...form, quantity: e.target.value })}
-          className="px-3 py-2 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 outline-none"
-          required
-        />
+          <label className="space-y-1">
+            <span className="text-xs text-muted">Fecha (tu hora local → se guarda en UTC)</span>
+            <input type="datetime-local" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} className={`num ${field}`} required />
+          </label>
 
-        <input
-          type="number"
-          step="any"
-          placeholder="Precio (USDT)"
-          value={form.price}
-          onChange={(e) => setForm({ ...form, price: e.target.value })}
-          className="px-3 py-2 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 outline-none"
-          required
-        />
+          <label className="space-y-1">
+            <span className="text-xs text-muted">Cantidad (en cripto)</span>
+            <input type="number" step="any" placeholder="0.00" value={form.quantity} onChange={(e) => setForm({ ...form, quantity: e.target.value })} className={`num ${field}`} required />
+          </label>
 
-        <input
-          type="number"
-          step="any"
-          placeholder="Fee (USDT)"
-          value={form.fee_usdt}
-          onChange={(e) =>
-            setForm({ ...form, fee_usdt: e.target.value, fee: e.target.value })
-          }
-          className="px-3 py-2 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 outline-none"
-        />
+          {needsTotal && (
+            <label className="space-y-1 sm:col-span-2">
+              <span className="text-xs text-muted">{totalLabel}</span>
+              <input type="number" step="any" placeholder="0.00" value={form.total} onChange={(e) => setForm({ ...form, total: e.target.value })} className={`num ${field}`} required />
+            </label>
+          )}
+        </div>
 
-        <input
-          type="datetime-local"
-          value={form.date}
-          onChange={(e) => setForm({ ...form, date: e.target.value })}
-          className="px-3 py-2 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 outline-none"
-          required
-        />
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted">
+          {unitPrice && (
+            <span className="num">≈ {formatCurrency(unitPrice)} por unidad (fee incluido)</span>
+          )}
+          {reduces && (
+            <span className="num">
+              {balance !== null ? `Saldo disponible: ${formatQuantity(balance)}` : 'Consultando saldo…'}
+            </span>
+          )}
+          {form.type === 'WITHDRAWAL' && (
+            <span>El retiro reduce cantidad y coste proporcional; no genera PnL.</span>
+          )}
+        </div>
 
-        {(form.type === 'SELL' || form.type === 'WITHDRAWAL') && (
-          <div className="md:col-span-4 text-xs text-gray-500 dark:text-gray-400">
-            {balanceLoading
-              ? 'Consultando saldo...'
-              : balance !== null
-                ? `Saldo disponible: ${balance}`
-                : 'No se pudo consultar el saldo'}
-          </div>
-        )}
-
-        <div className="md:col-span-4 flex items-center gap-4">
-          <button
-            type="submit"
-            disabled={loading}
-            className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 transition"
-          >
-            {loading ? 'Guardando...' : 'Guardar'}
+        <div className="flex items-center gap-3 pt-1">
+          <button type="submit" disabled={loading} className="rounded-lg bg-accent px-5 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50">
+            {loading ? 'Guardando…' : 'Registrar transacción'}
           </button>
-          {error && <span className="text-red-600 text-sm">{error}</span>}
+          {error && <span className="text-sm text-loss">{error}</span>}
         </div>
       </form>
-    </div>
+    </Card>
   );
 };
 

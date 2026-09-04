@@ -100,3 +100,25 @@ export function getSign(value: Numeric | null | undefined): "positive" | "negati
   if (d.isZero()) return "zero";
   return d.isPositive() ? "positive" : "negative";
 }
+
+/** Porcentaje con signo explícito (+/-) para chips de cambio 24h/7d/30d. */
+export function formatSignedPercentage(value: Numeric | null | undefined, decimals = 2): string {
+  if (value === null || value === undefined || value === "") return "—";
+  const d = toDecimal(value).toDecimalPlaces(decimals, Decimal.ROUND_HALF_UP);
+  const sign = d.isPositive() && !d.isZero() ? "+" : "";
+  return `${sign}${d.toFixed(decimals)}%`;
+}
+
+/** Importe compacto para cifras grandes: 1.2K, 3.4M. Sin moneda. */
+export function formatCompact(value: Numeric, decimals = 1): string {
+  const d = toDecimal(value);
+  const abs = d.abs();
+  const sign = d.isNegative() ? "-" : "";
+  if (abs.greaterThanOrEqualTo(1_000_000_000))
+    return `${sign}${abs.div(1_000_000_000).toDecimalPlaces(decimals).toString()}B`;
+  if (abs.greaterThanOrEqualTo(1_000_000))
+    return `${sign}${abs.div(1_000_000).toDecimalPlaces(decimals).toString()}M`;
+  if (abs.greaterThanOrEqualTo(1_000))
+    return `${sign}${abs.div(1_000).toDecimalPlaces(decimals).toString()}K`;
+  return d.toDecimalPlaces(2).toString();
+}

@@ -37,7 +37,7 @@ from sqlalchemy.orm import Session
 from .config import CORS_ORIGINS
 from .database import get_db
 from .models import Asset, Transaction, Wallet
-from .services.acb_engine import ACBError, add_transaction, get_or_create_asset, get_or_create_wallet
+from .services.acb_engine import ACBError, add_transaction, get_or_create_asset, get_or_create_wallet, recalculate_holding
 from .services import metrics
 from .services.price_history_service import ensure_ohlcv, update_all_assets
 from .scripts.initial_setup import seed_initial_balance
@@ -87,7 +87,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,
     allow_credentials=False,
-    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -146,7 +146,11 @@ def portfolio_summary(
     wallet_id: Optional[int] = Query(None, description="Ausente = global"),
     db: Session = Depends(get_db),
 ):
-    return metrics.get_portfolio_summary(db, wallet_id)
+    # Pasamos el market_provider para que cada activo traiga sus cambios 24h/7d/30d
+    # (3.6) y la lista pueda mostrarlos sin llamadas extra por fila.
+    return metrics.get_portfolio_summary(
+        db, wallet_id, market_provider=metrics.default_market_provider
+    )
 
 
 @app.get("/api/portfolio/realized-pnl")
@@ -263,6 +267,46 @@ def create_transaction(payload: TransactionIn, db: Session = Depends(get_db)):
     )
     return {"id": tx.id, "asset_id": tx.asset_id, "wallet_id": tx.wallet_id,
             "type": tx.type, "fee_usdt": str(tx.fee_usdt)}
+
+
+@app.delete("/api/transactions/{tx_id}")
+def delete_transaction(tx_id: int, db: Session = Depends(get_db)):
+    """
+    Elimina una transacción y recalcula el ACB del par (wallet, activo) afectado.
+
+    Si borrarla dejara en negativo una venta/retiro posterior (p. ej. eliminar la
+    compra de la que dependía una venta), se aborta con HTTP 400 y no se borra nada.
+    """
+    tx = db.get(Transaction, tx_id)
+    if tx is None:
+        raise HTTPException(status_code=404, detail="Transacción no encontrada.")
+    wallet_id, asset_id = tx.wallet_id, tx.asset_id
+    db.delete(tx)
+    db.flush()
+    try:
+        recalculate_holding(db, wallet_id, asset_id)  # relee y valida la secuencia
+    except ACBError:
+        db.rollback()
+        raise HTTPException(
+            status_code=400,
+            detail="No se puede eliminar: dejaría en negativo una venta o retiro "
+                   "posterior. Elimina o ajusta esas transacciones primero.",
+        )
+    db.commit()
+    return {"deleted": tx_id, "wallet_id": wallet_id, "asset_id": asset_id}
+
+
+@app.get("/api/coins/search")
+def coins_search(q: str = Query(..., min_length=2, description="Nombre o símbolo")):
+    """
+    Autocompletar de monedas (CoinGecko). Devuelve candidatas con su coingecko_id
+    real para que el usuario ELIJA en vez de escribirlo a mano.
+    """
+    from .services.coingecko_client import search_coins
+    try:
+        return search_coins(q)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"Error consultando CoinGecko: {exc}")
 
 
 @app.post("/api/setup", status_code=201)

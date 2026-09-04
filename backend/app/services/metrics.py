@@ -125,6 +125,7 @@ def get_portfolio_summary(
     db: Session,
     wallet_id: Optional[int] = None,
     price_provider: Optional[PriceProvider] = None,
+    market_provider: Optional[MarketProvider] = None,
 ) -> dict:
     """
     Valor total del portafolio en el scope, con el desglose por activo y el % de
@@ -132,6 +133,11 @@ def get_portfolio_summary(
 
     Si un activo no tiene precio disponible (sin coingecko_id o error de API), se
     marca `price_available: false`, su valor cuenta como 0 y no rompe el resumen.
+
+    Si se pasa `market_provider`, cada activo incluye además sus cambios de precio
+    24h/7d/30d (3.6) para poder mostrarlos en la lista sin llamadas extra. Es
+    best-effort: si la API de mercado falla para un activo, `changes` queda en None
+    y el resto del resumen no se ve afectado.
     """
     price_provider = price_provider or default_price_provider
     assets = _assets_in_scope(db, wallet_id)
@@ -145,12 +151,35 @@ def get_portfolio_summary(
         state = get_asset_state(db, asset.id, wallet_id)
         price_available = True
         price_now: Optional[Decimal] = None
-        try:
-            price_now = D(price_provider(asset))
-        except Exception:  # noqa: BLE001
-            price_available = False
+        changes = None
 
-        if price_available and state.total_quantity != ZERO:
+        if market_provider is not None:
+            # UNA sola llamada por activo: precio + cambios juntos (menos presión
+            # sobre el rate limit de CoinGecko). Si el de mercado falla, se cae al
+            # proveedor de precio simple.
+            try:
+                md = market_provider(asset)
+                p = md.get("price")
+                price_now = D(p) if p is not None else None
+                if price_now is None:
+                    price_available = False
+                changes = {
+                    "change_24h_pct": _s(md.get("change_24h_pct")),
+                    "change_7d_pct": _s(md.get("change_7d_pct")),
+                    "change_30d_pct": _s(md.get("change_30d_pct")),
+                }
+            except Exception:  # noqa: BLE001
+                try:
+                    price_now = D(price_provider(asset))
+                except Exception:  # noqa: BLE001
+                    price_available = False
+        else:
+            try:
+                price_now = D(price_provider(asset))
+            except Exception:  # noqa: BLE001
+                price_available = False
+
+        if price_available and price_now is not None and state.total_quantity != ZERO:
             value = get_asset_value(state, price_now)
             unrealized = get_unrealized_pnl(state, price_now)
             roi = get_roi(state, price_now)
@@ -167,6 +196,7 @@ def get_portfolio_summary(
             "asset_id": asset.id,
             "symbol": asset.symbol,
             "name": asset.name,
+            "decimals": asset.decimals,
             "quantity": _s(state.total_quantity),
             "avg_price": _s(state.average_price),
             "price_now": _s(price_now),
@@ -176,6 +206,7 @@ def get_portfolio_summary(
             "unrealized_pnl": _s(unrealized),
             "realized_pnl": _s(state.realized_pnl),
             "roi_pct": _s(roi),
+            "changes": changes,
             "_value_dec": value,  # interno para calcular allocation
         })
 
@@ -252,6 +283,7 @@ def get_asset_detail(
         "asset_id": asset.id,
         "symbol": asset.symbol,
         "name": asset.name,
+        "decimals": asset.decimals,
         "quantity": _s(state.total_quantity),
         "avg_price": _s(state.average_price),
         "price_now": _s(price_now),
