@@ -46,6 +46,20 @@ def default_market_provider(asset: Asset) -> dict:
     return get_market_data(asset.coingecko_id)
 
 
+def default_prefetch_markets(assets: "list[Asset]") -> None:
+    """Precarga en UNA sola llamada los datos de mercado de todos los activos del
+    scope (los que no estén ya cacheados y frescos). Así el resumen no hace una
+    petición por activo: dentro del TTL no toca la red, y al añadir uno nuevo solo
+    pide ese. Best-effort: si falla, cada activo caerá a su fallback individual."""
+    from .coingecko_client import prefetch_markets
+    ids = [a.coingecko_id for a in assets if a.coingecko_id]
+    if ids:
+        try:
+            prefetch_markets(ids)
+        except Exception:  # noqa: BLE001
+            pass
+
+
 # --- Estado de un activo dentro de un scope ----------------------------------
 def get_asset_state(db: Session, asset_id: int, wallet_id: Optional[int] = None) -> ACBState:
     """Estado ACB del activo en el scope (una wallet o global)."""
@@ -126,6 +140,7 @@ def get_portfolio_summary(
     wallet_id: Optional[int] = None,
     price_provider: Optional[PriceProvider] = None,
     market_provider: Optional[MarketProvider] = None,
+    prefetch: Optional[Callable[["list[Asset]"], None]] = None,
 ) -> dict:
     """
     Valor total del portafolio en el scope, con el desglose por activo y el % de
@@ -134,13 +149,16 @@ def get_portfolio_summary(
     Si un activo no tiene precio disponible (sin coingecko_id o error de API), se
     marca `price_available: false`, su valor cuenta como 0 y no rompe el resumen.
 
-    Si se pasa `market_provider`, cada activo incluye además sus cambios de precio
-    24h/7d/30d (3.6) para poder mostrarlos en la lista sin llamadas extra. Es
-    best-effort: si la API de mercado falla para un activo, `changes` queda en None
-    y el resto del resumen no se ve afectado.
+    `prefetch` (opcional) precarga los datos de mercado de TODOS los activos en una
+    sola petición antes del bucle, dejándolos en caché; así el bucle no hace una
+    llamada por activo. Dentro del TTL de la caché no se toca la red.
     """
     price_provider = price_provider or default_price_provider
     assets = _assets_in_scope(db, wallet_id)
+
+    # Precarga en lote (1 sola petición) para no pedir precio por-activo.
+    if prefetch is not None:
+        prefetch(assets)
 
     rows = []
     total_value = ZERO

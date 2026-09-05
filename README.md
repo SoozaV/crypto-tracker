@@ -36,10 +36,28 @@ cd backend
 python3 -m venv .venv && . .venv/bin/activate     # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 cp .env.example .env            # edita tus valores (CoinGecko key)
-alembic upgrade head            # crea portfolio.db con tablas e índices
-uvicorn app.main:app --reload   # http://127.0.0.1:8000/docs
+python run.py                   # http://127.0.0.1:8000  (auto-migra al arrancar)
 ```
-En tests puedes desactivar el cron con `ENABLE_SCHEDULER=0`.
+`run.py` arranca uvicorn **sin auto-recarga por defecto** (máxima estabilidad para
+usar la app). Para desarrollo con recarga al editar código: `RELOAD=1 python run.py`
+(vigila **solo** `app/`, nunca la BD). Importante:
+**no** uses `uvicorn app.main:app --reload` a secas, porque vigila toda la carpeta
+`backend/` (incluida `portfolio.db`) y cada escritura en la BD recargaría el
+servidor, dejándolo caído un instante (eso causaba "¿Está el backend en marcha?"
+al refrescar). Alternativa directa: `uvicorn app.main:app --reload --reload-dir app`.
+Máxima estabilidad: `RELOAD=0 python run.py`.
+
+Windows — puerto 8000 ocupado / backend "huérfano": si tras un reinicio quedó un
+backend viejo escuchando el 8000, `run.py` ahora **se niega a arrancar** con un
+mensaje claro (evita tener dos servidores en el mismo puerto, que hacía que las
+peticiones cayeran a veces en el proceso muerto). Para liberarlo, en PowerShell:
+
+    Get-NetTCPConnection -LocalPort 8000 -State Listen | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }
+
+o por PID: `netstat -ano | findstr :8000` y luego `taskkill /PID <pid> /F`. Después,
+`python run.py`.
+
+En tests, el cron y la auto-migración están desactivados (`conftest.py`).
 
 ### Frontend
 ```
@@ -66,6 +84,10 @@ con `decimal.js`). Los errores de negocio del ACB devuelven **HTTP 400**.
 | GET    | `/api/coins/search?q=`             | **Autocompletar de monedas (CoinGecko)**  |
 | POST   | `/api/transactions`                | Registra una transacción                  |
 | DELETE | `/api/transactions/{id}`           | **Elimina una transacción y recalcula el ACB** |
+| PATCH  | `/api/wallets/{id}`                | **Renombra / cambia el tipo de una wallet** |
+| GET    | `/api/export?wallet_id=`           | **Exporta datos (global o por wallet) a JSON** |
+| POST   | `/api/import`                      | **Importa un JSON sin duplicar (idempotente)** |
+| POST   | `/api/admin/reset`                 | **Borra todos los datos (requiere confirm:true)** |
 | POST   | `/api/setup`                       | Posición inicial (crea/reutiliza wallet + depósito) |
 | POST   | `/api/admin/refresh-prices`        | Fuerza la actualización del histórico     |
 
@@ -107,7 +129,75 @@ con `decimal.js`). Los errores de negocio del ACB devuelven **HTTP 400**.
 - Detalle del activo con velas + tu coste promedio, selector de periodo (7/30/90/365d),
   estadísticas completas y botón "Actualizar velas".
 
+## Copia de seguridad y datos
+
+- **Migración automática:** al arrancar, el backend aplica las migraciones
+  pendientes (`alembic upgrade head`) contra tu `DATABASE_URL`. Así, tras
+  actualizar el código, basta con **reiniciar el backend**: la columna `uid` se
+  añade sola sin perder datos. Se puede desactivar con `AUTO_MIGRATE=0` (entonces
+  ejecuta la migración a mano). En los tests está desactivada.
+- **Exportar / importar** (menú **Ajustes**): descarga un JSON global o por wallet
+  e impórtalo cuando quieras. La importación **no duplica**: cada transacción
+  lleva un `uid` estable y al importar se omiten las que ya existen (idempotente).
+  Si un archivo viene sin `uid` (hecho a mano), se deduplica por hash de contenido.
+  Identidades entre bases distintas: wallet por nombre, activo por símbolo.
+- **Renombrar wallet** en Ajustes (nombre único).
+- **Resetear todo** en Ajustes → "Zona de peligro" (hay que escribir `RESET`).
+
 ## Cambios recientes (Fase 5)
+
+### Rendimiento y correcciones (esta ronda)
+- **Precios en lote y desde caché (clave con muchos activos):** el resumen ya no
+  hace una petición por activo. Un *prefetch* pide en **UNA sola llamada** a
+  CoinGecko (`/coins/markets?ids=…`) todos los activos del scope y los cachea 5
+  min. Así, al refrescar dentro de esos 5 min **no se toca la red** (precio
+  cacheado); al expirar, se refresca todo en 1 petición; y al **añadir un activo
+  nuevo** solo se pide ese (los demás siguen cacheados). Esto elimina el rate
+  limit que aparecía con ~30 símbolos.
+- **Historial: columna "Costo"** (cantidad × precio), además del precio unitario.
+- **Decimales de precio adaptativos:** tokens muy baratos (SHIB, PEPE) ya no se
+  ven como `0.00`; se muestran con cifras significativas (`0.00000535`). Nuevo
+  `formatPrice()` usado en precio promedio, precio actual y precio del historial.
+
+### Correcciones (estabilidad / rate limit)
+- **El frontend fallaba "después de un rato" sin ningún mensaje** → el resumen
+  llamaba a CoinGecko por cada activo en cada refresco (caché de solo 60s) y, al
+  llegar el rate limit del plan gratuito (429), cada llamada reintentaba 4 veces
+  con timeout de 15s → hasta **~63s bloqueada por activo**, sin log. axios cortaba
+  a los 10s y mostraba "¿Está el backend en marcha?". Arreglado:
+  - Timeouts cortos `(conexión 3s, lectura 6s)` en vez de 15s.
+  - **No se reintentan** los 429/4xx (reintentar empeora el rate limit); se falla
+    rápido y se degrada (el precio se muestra como no disponible), en vez de colgar.
+  - **Caché de precios subida a 300s** (configurable con `PRICE_CACHE_TTL`), así el
+    resumen casi nunca llama a CoinGecko.
+  - Menos reintentos en Binance; timeout de axios a 20s con reintentos en el front.
+  - `run.py` ahora arranca **sin reload** por defecto (evita recargas y huérfanos).
+  - **Recomendado:** pon tu `COINGECKO_API_KEY` (demo, gratis) en `backend/.env`;
+    sube muchísimo el límite de peticiones y evita los 429.
+
+### Correcciones (arranque / errores)
+- **El backend parecía "morir" al refrescar (F5)** → `uvicorn --reload` vigilaba
+  toda la carpeta `backend/`, así que escribir en `portfolio.db` disparaba una
+  recarga y tumbaba el puerto un instante (en Windows el worker viejo quedaba
+  huérfano reteniendo el puerto). Solución: nuevo `backend/run.py` que vigila solo
+  `app/` (probado: escribir en la BD ya no recarga; cambiar código sí). El frontend
+  además reintenta la carga ante un blip y muestra un botón "Reintentar".
+- **Errores 500 que parecían de CORS** → tras añadir `uid`, una BD sin migrar
+  hacía fallar toda consulta a `transactions` con 500, y el navegador lo mostraba
+  como "No 'Access-Control-Allow-Origin'". Ahora: (a) el backend **auto-migra al
+  arrancar**, así que el problema desaparece al reiniciar; y (b) un middleware
+  añade cabeceras CORS también a los errores 500, para que se vea el mensaje real
+  en vez de un críptico error de CORS.
+
+### Funciones (entrada)
+- **Cost Price / precio unitario**: el formulario y "Cargar posición inicial"
+  permiten introducir el importe como **Total (USDT)** o como **Precio por unidad**
+  (el "Cost Price" de Binance). Se convierte automáticamente; el ACB no cambia.
+
+### Funciones (datos)
+- **Exportar/Importar** (global o por wallet) con dedupe por `uid` + hash de
+  contenido; **renombrar wallet**; **reset total** con confirmación. Migración
+  `a1b2c3d4e5f6` añade `transactions.uid`.
 
 ### Correcciones
 - **DELETE bloqueado por CORS** → el middleware solo permitía GET/POST/OPTIONS;

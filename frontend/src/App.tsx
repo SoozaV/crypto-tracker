@@ -10,6 +10,7 @@ import AssetDetail from './components/AssetDetail';
 import TransactionForm from './components/TransactionForm';
 import TransactionHistory from './components/TransactionHistory';
 import Onboarding from './components/Onboarding';
+import Settings from './components/Settings';
 import { Spinner } from './components/ui';
 import { formatClock } from './utils/format';
 
@@ -77,9 +78,24 @@ function AppShell() {
             <Link to="/onboarding" className="rounded-xl border border-line bg-surface px-3 py-2 text-sm text-muted hover:text-ink">
               Setup
             </Link>
+            <Link to="/settings" className="rounded-xl border border-line bg-surface px-3 py-2 text-sm text-muted hover:text-ink">
+              Ajustes
+            </Link>
             <ThemeToggle />
           </div>
         </header>
+
+        {portfolio.error && (
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-loss/40 bg-loss/10 px-4 py-3">
+            <span className="text-sm text-loss">{portfolio.error}</span>
+            <button
+              onClick={() => portfolio.reload()}
+              className="rounded-lg border border-loss/40 px-3 py-1.5 text-sm text-loss hover:bg-loss/10"
+            >
+              Reintentar
+            </button>
+          </div>
+        )}
 
         <Routes>
           <Route
@@ -104,6 +120,7 @@ function AppShell() {
             }
           />
           <Route path="/asset/:assetId" element={<AssetDetail walletId={walletId} />} />
+          <Route path="/settings" element={<Settings wallets={catalog.wallets} onChanged={bump} />} />
           <Route
             path="/onboarding"
             element={<Onboarding wallets={catalog.wallets} onComplete={() => { bump(); navigate('/'); }} />}

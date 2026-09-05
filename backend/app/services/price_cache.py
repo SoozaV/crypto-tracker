@@ -54,4 +54,9 @@ class TTLCache:
 
 
 # Caché compartida para precios en vivo (60s).
-price_cache = TTLCache(ttl_seconds=60.0)
+import os as _os
+
+# TTL por defecto configurable (PRICE_CACHE_TTL, en segundos). Se sube a 300s
+# para que el resumen no llame a CoinGecko en cada refresco (evita el rate limit
+# del plan gratuito, principal causa de que el backend se "cuelgue" al reintentar).
+price_cache = TTLCache(ttl_seconds=float(_os.getenv("PRICE_CACHE_TTL", "300")))

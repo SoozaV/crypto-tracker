@@ -184,3 +184,52 @@ def test_update_price_history_is_idempotent(db, monkeypatch):
     close = db.query(PriceHistory).filter_by(
         asset_id=asset.id, timestamp_utc=datetime(2025, 1, 2)).one().close
     assert close == Decimal("118")
+
+
+def test_prefetch_markets_batches_and_caches(monkeypatch):
+    """prefetch_markets hace UNA sola petición para varios ids y los deja en caché,
+    de modo que get_market_data luego no vuelve a llamar a la red."""
+    price_cache.clear()
+    calls = {"n": 0, "last_ids": None}
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        calls["n"] += 1
+        calls["last_ids"] = params.get("ids")
+        return _FakeResp(
+            '[{"id":"bitcoin","symbol":"btc","current_price":64000,'
+            '"price_change_percentage_24h_in_currency":1.5},'
+            '{"id":"ethereum","symbol":"eth","current_price":3000,'
+            '"price_change_percentage_24h_in_currency":-2.0}]'
+        )
+
+    monkeypatch.setattr(cg.requests, "get", fake_get)
+    result = cg.prefetch_markets(["bitcoin", "ethereum"])
+    assert calls["n"] == 1                          # UNA sola petición para 2 ids
+    assert "bitcoin" in calls["last_ids"] and "ethereum" in calls["last_ids"]
+    assert result["bitcoin"]["price"] == Decimal("64000")
+
+    # get_market_data ahora sale de caché (no incrementa las llamadas de red)
+    md = cg.get_market_data("ethereum")
+    assert md["price"] == Decimal("3000")
+    assert calls["n"] == 1                           # sigue siendo 1 -> vino de caché
+
+
+def test_prefetch_only_fetches_missing(monkeypatch):
+    """Si un id ya está cacheado, prefetch solo pide los que faltan (añadir un
+    activo nuevo no re-pide los que ya tenías)."""
+    price_cache.clear()
+    calls = {"ids": []}
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        calls["ids"].append(params.get("ids"))
+        # Devuelve solo lo pedido
+        ids = params.get("ids").split(",")
+        rows = ",".join(
+            f'{{"id":"{i}","symbol":"x","current_price":10}}' for i in ids
+        )
+        return _FakeResp(f"[{rows}]")
+
+    monkeypatch.setattr(cg.requests, "get", fake_get)
+    cg.prefetch_markets(["bitcoin"])                 # pide bitcoin
+    cg.prefetch_markets(["bitcoin", "solana"])       # solo debería pedir solana
+    assert calls["ids"] == ["bitcoin", "solana"]

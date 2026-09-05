@@ -108,3 +108,26 @@ export interface CoinSearchResult {
   market_cap_rank: number | null;
   thumb: string | null;
 }
+
+/** Estructura del archivo de export/import. */
+export interface ExportBundle {
+  schema_version: number;
+  exported_at?: string;
+  scope?: string;
+  wallets: Array<{ name: string; type: string }>;
+  assets: Array<{
+    symbol: string;
+    name: string | null;
+    decimals: number;
+    coingecko_id: string | null;
+    binance_symbol: string | null;
+  }>;
+  transactions: Array<Record<string, string>>;
+}
+
+export interface ImportReport {
+  wallets_created: number;
+  assets_created: number;
+  transactions_imported: number;
+  transactions_skipped: number;
+}

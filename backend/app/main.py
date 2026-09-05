@@ -39,13 +39,22 @@ from .database import get_db
 from .models import Asset, Transaction, Wallet
 from .services.acb_engine import ACBError, add_transaction, get_or_create_asset, get_or_create_wallet, recalculate_holding
 from .services import metrics
+from .services import data_io
 from .services.price_history_service import ensure_ohlcv, update_all_assets
 from .scripts.initial_setup import seed_initial_balance
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Arranca el cron de OHLCV al iniciar y lo detiene al cerrar (tarea 4.2)."""
+    """Al iniciar: aplica migraciones pendientes (para que la BD del usuario esté
+    siempre al día) y arranca el cron de OHLCV (tarea 4.2)."""
+    if os.getenv("AUTO_MIGRATE", "1") != "0":
+        try:
+            _run_migrations()
+            print("[migrations] Base de datos al día (alembic upgrade head).")
+        except Exception as exc:  # noqa: BLE001
+            print(f"[migrations] AVISO: no se pudieron aplicar migraciones: {exc}\n"
+                  f"             Ejecuta manualmente 'alembic upgrade head' en /backend.")
     scheduler = None
     if os.getenv("ENABLE_SCHEDULER", "1") != "0":
         from .scheduler import create_scheduler
@@ -57,6 +66,19 @@ async def lifespan(app: FastAPI):
     finally:
         if scheduler is not None:
             scheduler.shutdown(wait=False)
+
+
+def _run_migrations() -> None:
+    """Aplica 'alembic upgrade head' de forma programática usando la config del
+    proyecto (rutas absolutas, así funciona sea cual sea el cwd)."""
+    from pathlib import Path
+    from alembic import command
+    from alembic.config import Config
+
+    base = Path(__file__).resolve().parent.parent  # .../backend
+    cfg = Config(str(base / "alembic.ini"))
+    cfg.set_main_option("script_location", str(base / "alembic"))
+    command.upgrade(cfg, "head")
 
 
 # --- Rate limiting (tarea 6.3) -----------------------------------------------
@@ -81,6 +103,32 @@ app = FastAPI(title="Crypto Portfolio Tracker", version="0.6.0", lifespan=lifesp
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_handler)
 app.add_middleware(SlowAPIMiddleware)
+
+# Middleware que captura excepciones no controladas y responde 500 CON cabeceras
+# CORS. Sin esto, un error interno (p. ej. una migración pendiente) llega al
+# navegador SIN 'Access-Control-Allow-Origin' y se ve como un críptico error de
+# CORS en vez del mensaje real.
+from starlette.middleware.base import BaseHTTPMiddleware
+
+
+class _ErrorCorsMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        try:
+            return await call_next(request)
+        except Exception as exc:  # noqa: BLE001
+            origin = request.headers.get("origin")
+            headers = {}
+            if origin and (origin in CORS_ORIGINS or "*" in CORS_ORIGINS):
+                headers["Access-Control-Allow-Origin"] = origin
+                headers["Vary"] = "Origin"
+            return JSONResponse(
+                status_code=500,
+                content={"detail": f"Error interno del servidor: {exc}"},
+                headers=headers,
+            )
+
+
+app.add_middleware(_ErrorCorsMiddleware)
 
 # CORS restringido al/los origen(es) del frontend (tarea 6.2).
 app.add_middleware(
@@ -131,6 +179,34 @@ def list_wallets(db: Session = Depends(get_db)):
     return [{"id": w.id, "name": w.name, "type": w.type} for w in wallets]
 
 
+class WalletPatch(BaseModel):
+    name: Optional[str] = Field(None, min_length=1, max_length=100)
+    type: Optional[str] = None
+
+
+@app.patch("/api/wallets/{wallet_id}")
+def rename_wallet(wallet_id: int, payload: WalletPatch, db: Session = Depends(get_db)):
+    """Renombra (y/o cambia el tipo de) una wallet. El nombre debe ser único."""
+    wallet = db.get(Wallet, wallet_id)
+    if wallet is None:
+        raise HTTPException(status_code=404, detail="Wallet no encontrada.")
+    if payload.name is not None:
+        new_name = payload.name.strip()
+        if not new_name:
+            raise HTTPException(status_code=400, detail="El nombre no puede estar vacío.")
+        clash = db.execute(
+            select(Wallet).where(Wallet.name == new_name, Wallet.id != wallet_id)
+        ).scalar_one_or_none()
+        if clash is not None:
+            raise HTTPException(status_code=409, detail="Ya existe una wallet con ese nombre.")
+        wallet.name = new_name
+    if payload.type is not None:
+        wallet.type = payload.type.strip().upper()
+    db.commit()
+    db.refresh(wallet)
+    return {"id": wallet.id, "name": wallet.name, "type": wallet.type}
+
+
 @app.get("/api/assets")
 def list_assets(db: Session = Depends(get_db)):
     assets = db.execute(select(Asset)).scalars().all()
@@ -146,10 +222,12 @@ def portfolio_summary(
     wallet_id: Optional[int] = Query(None, description="Ausente = global"),
     db: Session = Depends(get_db),
 ):
-    # Pasamos el market_provider para que cada activo traiga sus cambios 24h/7d/30d
-    # (3.6) y la lista pueda mostrarlos sin llamadas extra por fila.
+    # market_provider da los cambios 24h/7d/30d por activo; prefetch precarga TODO
+    # en 1 sola petición a CoinGecko (0 peticiones si está en caché, <5 min).
     return metrics.get_portfolio_summary(
-        db, wallet_id, market_provider=metrics.default_market_provider
+        db, wallet_id,
+        market_provider=metrics.default_market_provider,
+        prefetch=metrics.default_prefetch_markets,
     )
 
 
@@ -337,3 +415,48 @@ def refresh_prices(days: int = Query(200, ge=1, le=1000), db: Session = Depends(
     """Ejecuta manualmente la actualización del histórico (lo mismo que el cron)."""
     report = update_all_assets(db, days=days)
     return {"updated": {k: {"inserted": v[0], "updated": v[1]} for k, v in report.items()}}
+
+
+# --- Datos: exportar / importar / reset ---------------------------------------
+@app.get("/api/export")
+def export_data_endpoint(
+    wallet_id: Optional[int] = Query(None, description="Ausente = global"),
+    db: Session = Depends(get_db),
+):
+    """Exporta los datos (global o de una wallet) como JSON. Incluye el `uid` de
+    cada transacción para poder reimportar sin duplicar."""
+    return data_io.export_data(db, wallet_id)
+
+
+class ImportIn(BaseModel):
+    # El payload es el JSON exportado; lo aceptamos flexible.
+    schema_version: Optional[int] = None
+    scope: Optional[str] = None
+    exported_at: Optional[str] = None
+    wallets: list[dict] = Field(default_factory=list)
+    assets: list[dict] = Field(default_factory=list)
+    transactions: list[dict] = Field(default_factory=list)
+
+
+@app.post("/api/import")
+def import_data_endpoint(payload: ImportIn, db: Session = Depends(get_db)):
+    """Importa un archivo exportado, fusionando sin duplicar (por `uid`, con
+    respaldo por hash de contenido). Es idempotente."""
+    try:
+        return data_io.import_data(db, payload.model_dump())
+    except ACBError:
+        db.rollback()
+        raise
+
+
+class ResetIn(BaseModel):
+    confirm: bool = False
+
+
+@app.post("/api/admin/reset")
+def reset_endpoint(payload: ResetIn, db: Session = Depends(get_db)):
+    """Borra TODOS los datos del usuario. Requiere `confirm: true` para evitar
+    ejecuciones accidentales. Operación irreversible."""
+    if not payload.confirm:
+        raise HTTPException(status_code=400, detail="Falta confirmación (confirm=true).")
+    return data_io.reset_all(db)

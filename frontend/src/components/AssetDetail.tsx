@@ -5,6 +5,7 @@ import { getAssetDetail, getOhlcv, refreshPriceHistory } from '../services/api';
 import type { AssetDetail as AssetDetailType, OhlcvCandle } from '../types';
 import {
   formatCurrency,
+  formatPrice,
   formatQuantity,
   formatPercentage,
   toDecimal,
@@ -160,8 +161,8 @@ const AssetDetail: React.FC<Props> = ({ walletId }) => {
 
   const stats: Array<{ k: string; v: string; cls?: string }> = [
     { k: 'Cantidad', v: formatQuantity(detail.quantity, detail.decimals ?? 8) },
-    { k: 'Tu precio prom.', v: formatCurrency(detail.avg_price), cls: 'text-accent' },
-    { k: 'Precio actual', v: detail.price_now != null ? formatCurrency(detail.price_now) : '—' },
+    { k: 'Tu precio prom.', v: formatPrice(detail.avg_price), cls: 'text-accent' },
+    { k: 'Precio actual', v: formatPrice(detail.price_now) },
     { k: 'Valor', v: formatCurrency(detail.value) },
     { k: 'Coste', v: formatCurrency(detail.cost_basis) },
     { k: 'PnL no realizado', v: formatCurrency(detail.unrealized_pnl), cls: signClass(detail.unrealized_pnl) },

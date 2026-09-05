@@ -81,6 +81,31 @@ export function formatCurrency(value: Numeric, decimals = 2): string {
   return formatMoney(value, decimals);
 }
 
+/**
+ * Formatea un PRECIO por unidad con decimales ADAPTATIVOS. Los tokens muy baratos
+ * (SHIB, PEPE) necesitan más decimales para no mostrarse como "0.00":
+ *   >= 1     -> 2 decimales             (79,828.00)
+ *   >= 0.01  -> 4 decimales             (0.1234)
+ *   < 0.01   -> 4 cifras significativas (0.00000535)
+ */
+export function formatPrice(value: Numeric | null | undefined, currency = "USDT"): string {
+  if (value === null || value === undefined || value === "") return "—";
+  const d = toDecimal(value);
+  if (d.isZero()) return `0.00 ${currency}`;
+  const abs = d.abs();
+  let out: string;
+  if (abs.greaterThanOrEqualTo(1)) {
+    out = d.toDecimalPlaces(2, Decimal.ROUND_HALF_UP).toFixed(2);
+  } else if (abs.greaterThanOrEqualTo(0.01)) {
+    out = d.toDecimalPlaces(4, Decimal.ROUND_HALF_UP).toFixed(4);
+  } else {
+    out = d.toSignificantDigits(4, Decimal.ROUND_HALF_UP).toString();
+  }
+  const parts = out.split(".");
+  parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  return `${parts.join(".")} ${currency}`;
+}
+
 /** Alias de UI: cantidad de cripto. */
 export function formatQuantity(value: Numeric, decimals = 8): string {
   return formatCrypto(value, decimals);

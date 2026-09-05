@@ -1,7 +1,7 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { PortfolioSummary, AssetDetail } from '../types';
-import { formatQuantity, formatCurrency, formatPercentage, toDecimal } from '../utils/decimalHelper';
+import { formatQuantity, formatCurrency, formatPrice, formatPercentage, toDecimal } from '../utils/decimalHelper';
 import { Card, SectionLabel, ChangeChip, signClass } from './ui';
 
 interface Props {
@@ -88,10 +88,10 @@ const AssetList: React.FC<Props> = ({ summary, loading, error }) => {
                   {/* Precio promedio del usuario en ámbar: el mismo color que su
                       línea de coste en el gráfico de velas. */}
                   <td className="num px-3 py-3 text-right text-accent">
-                    {formatCurrency(a.avg_price)}
+                    {formatPrice(a.avg_price)}
                   </td>
                   <td className="num px-3 py-3 text-right text-ink">
-                    {a.price_now != null ? formatCurrency(a.price_now) : '—'}
+                    {formatPrice(a.price_now)}
                   </td>
                   <td className="px-3 py-3 text-right">
                     <ChangeChip value={a.changes?.change_24h_pct} />

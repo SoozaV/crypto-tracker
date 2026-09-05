@@ -16,16 +16,26 @@ export function usePortfolioSummary(walletId: number | undefined, refreshKey: nu
 
   const load = useCallback(
     async (showSpinner = true) => {
-      try {
-        if (showSpinner) setLoading(true);
-        const data = await getPortfolioSummary(walletId);
-        setSummary(data);
-        setUpdatedAt(new Date());
-        setError(null);
-      } catch {
-        setError('No se pudo cargar el portafolio. ¿Está el backend en marcha?');
-      } finally {
-        setLoading(false);
+      // Reintentos ante un blip del backend (p. ej. si uvicorn se recargó justo
+      // en ese instante). Así un F5 desafortunado no muestra el error de golpe.
+      const attempts = 3;
+      for (let i = 0; i < attempts; i++) {
+        try {
+          if (showSpinner && i === 0) setLoading(true);
+          const data = await getPortfolioSummary(walletId);
+          setSummary(data);
+          setUpdatedAt(new Date());
+          setError(null);
+          setLoading(false);
+          return;
+        } catch {
+          if (i < attempts - 1) {
+            await new Promise((r) => setTimeout(r, 700 * (i + 1)));
+            continue;
+          }
+          setError('No se pudo cargar el portafolio. ¿Está el backend en marcha?');
+          setLoading(false);
+        }
       }
     },
     [walletId],

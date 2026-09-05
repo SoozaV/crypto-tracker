@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { setupInitialBalance } from '../services/api';
+import { safeMul } from '../utils/decimalHelper';
 import type { Wallet } from '../types';
 import { Card } from './ui';
 import AssetPicker, { type PickedCoin } from './AssetPicker';
@@ -28,6 +29,7 @@ const Onboarding: React.FC<Props> = ({ wallets, onComplete }) => {
   const [coin, setCoin] = useState<PickedCoin | null>(null);
   const [quantity, setQuantity] = useState('');
   const [totalCost, setTotalCost] = useState('');
+  const [costMode, setCostMode] = useState<'total' | 'unit'>('total');
   const [decimals, setDecimals] = useState(8);
   const [advanced, setAdvanced] = useState(false);
   const [binance, setBinance] = useState('');
@@ -42,7 +44,7 @@ const Onboarding: React.FC<Props> = ({ wallets, onComplete }) => {
     e.preventDefault();
     if (!walletName) return setError('Indica el nombre de la nueva wallet.');
     if (!hasCoin) return setError('Busca y elige la moneda.');
-    if (!quantity || !totalCost) return setError('Indica cantidad y coste total.');
+    if (!quantity || !totalCost) return setError('Indica cantidad y coste.');
     try {
       setLoading(true);
       await setupInitialBalance({
@@ -53,7 +55,7 @@ const Onboarding: React.FC<Props> = ({ wallets, onComplete }) => {
         coingecko_id: coin!.coingecko_id,
         binance_symbol: (binance || coin!.binance_symbol) || undefined,
         quantity,
-        total_cost: totalCost,
+        total_cost: costMode === 'unit' ? safeMul(totalCost, quantity) : totalCost,
         decimals,
       });
       setError(null);
@@ -118,8 +120,24 @@ const Onboarding: React.FC<Props> = ({ wallets, onComplete }) => {
               <input type="number" step="any" placeholder="0.5" value={quantity} onChange={(e) => setQuantity(e.target.value)} className={`num ${field}`} />
             </label>
             <label className="space-y-1">
-              <span className="text-xs text-muted">Coste total (USDT)</span>
-              <input type="number" step="any" placeholder="25000" value={totalCost} onChange={(e) => setTotalCost(e.target.value)} className={`num ${field}`} />
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-muted">{costMode === 'unit' ? 'Precio de coste (USDT/ud.)' : 'Coste total (USDT)'}</span>
+                <div className="flex rounded-md border border-line p-0.5">
+                  {(['total', 'unit'] as const).map((m) => (
+                    <button
+                      key={m}
+                      type="button"
+                      onClick={() => setCostMode(m)}
+                      className={`rounded px-1.5 py-0.5 text-[0.7rem] transition-colors ${
+                        costMode === m ? 'bg-accent text-white' : 'text-muted hover:text-ink'
+                      }`}
+                    >
+                      {m === 'total' ? 'Total' : 'Precio'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <input type="number" step="any" placeholder={costMode === 'unit' ? '55000' : '25000'} value={totalCost} onChange={(e) => setTotalCost(e.target.value)} className={`num ${field}`} />
             </label>
           </div>
 

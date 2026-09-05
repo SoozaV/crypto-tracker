@@ -24,6 +24,7 @@ from __future__ import annotations
 import enum
 from datetime import datetime
 from decimal import Decimal
+from uuid import uuid4
 
 from sqlalchemy import (
     CheckConstraint,
@@ -115,6 +116,11 @@ class Transaction(Base):
     __tablename__ = "transactions"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # Identificador estable e independiente de la BD. Sirve para exportar/importar
+    # sin duplicar: al importar, si el uid ya existe, la transacción se omite.
+    uid: Mapped[str] = mapped_column(
+        String, nullable=False, unique=True, index=True, default=lambda: str(uuid4())
+    )
     wallet_id: Mapped[int] = mapped_column(
         ForeignKey("wallets.id", ondelete="RESTRICT"), nullable=False
     )

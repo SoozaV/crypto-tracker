@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { getTransactions, deleteTransaction } from '../services/api';
 import type { Transaction, AssetCatalog, Wallet } from '../types';
-import { formatCurrency, formatQuantity } from '../utils/decimalHelper';
+import { formatCurrency, formatPrice, formatQuantity, safeMul } from '../utils/decimalHelper';
 import { formatDateTime } from '../utils/format';
 import { Card, SectionLabel, Spinner } from './ui';
 
@@ -100,6 +100,7 @@ const TransactionHistory: React.FC<Props> = ({ walletId, wallets, assets, refres
                 <th className="px-3 py-2 font-medium">Activo</th>
                 <th className="px-3 py-2 text-right font-medium">Cantidad</th>
                 <th className="px-3 py-2 text-right font-medium">Precio</th>
+                <th className="px-3 py-2 text-right font-medium">Costo</th>
                 <th className="px-3 py-2 text-right font-medium">Fecha (UTC)</th>
                 <th className="py-2 pl-3 pr-4 text-right font-medium"></th>
               </tr>
@@ -111,7 +112,8 @@ const TransactionHistory: React.FC<Props> = ({ walletId, wallets, assets, refres
                   <td className="px-3 py-2.5 text-muted">{walletName(t.wallet_id)}</td>
                   <td className="px-3 py-2.5 text-ink">{t.asset_symbol ?? t.asset_id}</td>
                   <td className="num px-3 py-2.5 text-right text-ink">{formatQuantity(t.quantity, decimalsFor(t.asset_id))}</td>
-                  <td className="num px-3 py-2.5 text-right text-muted">{formatCurrency(t.price)}</td>
+                  <td className="num px-3 py-2.5 text-right text-muted">{formatPrice(t.price)}</td>
+                  <td className="num px-3 py-2.5 text-right text-ink">{formatCurrency(safeMul(t.quantity, t.price))}</td>
                   <td className="num px-3 py-2.5 text-right text-xs text-muted">{formatDateTime(t.date_utc)}</td>
                   <td className="py-2.5 pl-3 pr-4 text-right">
                     <button

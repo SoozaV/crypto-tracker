@@ -26,7 +26,7 @@ from tenacity import (
 )
 
 BINANCE_BASE_URL = os.getenv("BINANCE_BASE_URL", "https://api.binance.com")
-_TIMEOUT = 15
+_TIMEOUT = (3.05, 10)
 
 
 class OHLCVError(RuntimeError):
@@ -53,9 +53,9 @@ class Candle:
 
 @retry(
     reraise=True,
-    stop=stop_after_attempt(4),
-    wait=wait_exponential(multiplier=0.5, min=0.5, max=8),
-    retry=retry_if_exception_type(requests.RequestException),
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=0.5, min=0.5, max=4),
+    retry=retry_if_exception_type((requests.ConnectionError, requests.Timeout)),
 )
 def _get_klines(symbol: str, interval: str, limit: int) -> list[list[Any]]:
     url = f"{BINANCE_BASE_URL}/api/v3/klines"

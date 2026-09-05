@@ -8,6 +8,8 @@ import type {
   TransactionCreate,
   OhlcvResponse,
   CoinSearchResult,
+  ExportBundle,
+  ImportReport,
 } from '../types';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
@@ -15,7 +17,7 @@ const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api'
 const api = axios.create({
   baseURL: API_BASE_URL,
   headers: { 'Content-Type': 'application/json' },
-  timeout: 10000,
+  timeout: 20000,
 });
 
 export const getWallets = async (): Promise<Wallet[]> => {
@@ -60,6 +62,29 @@ export const deleteTransaction = async (id: number): Promise<{ deleted: number }
 
 export const searchCoins = async (q: string): Promise<CoinSearchResult[]> => {
   const res = await api.get('/coins/search', { params: { q } });
+  return res.data;
+};
+
+export const renameWallet = async (
+  id: number,
+  data: { name?: string; type?: string },
+): Promise<Wallet> => {
+  const res = await api.patch(`/wallets/${id}`, data);
+  return res.data;
+};
+
+export const exportData = async (walletId?: number): Promise<ExportBundle> => {
+  const res = await api.get('/export', { params: walletId ? { wallet_id: walletId } : {} });
+  return res.data;
+};
+
+export const importData = async (payload: ExportBundle): Promise<ImportReport> => {
+  const res = await api.post('/import', payload);
+  return res.data;
+};
+
+export const resetAll = async (): Promise<{ deleted: Record<string, number> }> => {
+  const res = await api.post('/admin/reset', { confirm: true });
   return res.data;
 };
 
