@@ -104,8 +104,13 @@ export const setupInitialBalance = async (payload: {
   return res.data;
 };
 
-export const getOhlcv = async (assetId: number, days: number = 30): Promise<OhlcvResponse> => {
-  const res = await api.get(`/asset/${assetId}/ohlcv`, { params: { days } });
+export const getOhlcv = async (
+  assetId: number,
+  opts: { interval?: string; limit?: number } = {},
+): Promise<OhlcvResponse> => {
+  const res = await api.get(`/asset/${assetId}/ohlcv`, {
+    params: { interval: opts.interval ?? '1d', limit: opts.limit ?? 300 },
+  });
   return res.data;
 };
 

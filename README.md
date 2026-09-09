@@ -23,8 +23,8 @@ registras tus movimientos y todo se guarda en SQLite en tu máquina.
   precios (CoinGecko + Binance, caché, reintentos), métricas, OHLCV crudo + cron
   diario, y seguridad (CORS, rate limiting, claves en `.env`).
 - ✅ **Fase 5 (frontend)** — interfaz completa y rediseñada (ver más abajo).
-- ⏳ **Fase 7** — indicadores en TypeScript (RSI/Stoch/SMA + traducción de Pine
-  Script). El panel del gráfico ya está preparado para recibirlos.
+- ✅ **Fase 7** — indicadores en TypeScript (SMA, RSI, Stoch y cruce de EMAs
+  traducido de Pine Script), con panel de activación y osciladores en subpanel.
 
 Tests: **38 en verde** (`pytest`) + 10 del helper de `decimal.js` en el frontend.
 
@@ -144,7 +144,48 @@ con `decimal.js`). Los errores de negocio del ACB devuelven **HTTP 400**.
 - **Renombrar wallet** en Ajustes (nombre único).
 - **Resetear todo** en Ajustes → "Zona de peligro" (hay que escribir `RESET`).
 
+## Indicadores técnicos (Fase 7)
+
+Todos los indicadores se calculan **en el frontend** con `technicalindicators`
+(el backend solo sirve las velas OHLCV crudas). El gráfico del detalle del activo
+permite elegir temporalidad **1h / 4h / 1d / 1s (semana)** y muestra bastantes más
+velas (se piden directamente a Binance por intervalo). Los indicadores se activan
+con checkboxes: SMA y el cruce de EMA 9/21 se dibujan **sobre el precio**; RSI y
+Stoch en un **panel inferior sincronizado**.
+
+Archivos:
+- `frontend/src/indicators/types.ts` — la interfaz `Indicator`.
+- `frontend/src/indicators/builtin.ts` — SMA, EMA cross, RSI, Stoch, Ichimoku OB/OS.
+- `frontend/src/indicators/registry.ts` — lista de indicadores disponibles.
+- `frontend/src/utils/pineAdapter.ts` — guía Pine Script → TypeScript.
+
+Añadir un indicador nuevo (p. ej. traducido de Pine Script):
+1. Impleméntalo en `builtin.ts` según la interfaz `Indicator`: extrae los precios
+   de las velas, calcula con `technicalindicators`, alinea con `align()` y
+   devuelve `{ lines, levels? }` indicando `pane: 'price'` (overlay) u
+   `'oscillator'` (panel inferior). La tabla de equivalencias Pine→TS está en
+   `pineAdapter.ts` (`ta.sma`→`SMA.calculate`, `plot`→una línea, `hline`→`levels`,
+   `overlay=true`→`pane:'price'`, etc.).
+2. Añádelo al array de `registry.ts`. El panel de la UI lo mostrará solo.
+
 ## Cambios recientes (Fase 5)
+
+### Fase 7 + gráfico
+- **Osciladores alineados con las velas:** además de igualar el ancho de la
+  escala de precio, el panel del oscilador recibe una serie "fantasma" que cubre
+  todo el rango de velas y se sincroniza el rango lógico; así ambos comparten el
+  mismo dominio temporal (los indicadores empiezan más tarde por el warm-up) y
+  cada fecha cae en la misma coordenada x. Verificado: diff de coordenadas = 0.
+- **Líneas de indicador con color por valor:** `IndicatorLine.colorAt` permite
+  colorear por tramos (traduce el `color := …` condicional de Pine). El Ichimoku
+  OB/OS ahora se pinta verde (≥7), rojo (≤−7) y gris en medio.
+- **Indicador "Ichimoku OB/OS"** traducido de Pine Script (oscilador ±10 con
+  niveles ±7), como ejemplo de la extensibilidad.
+- **Selector de temporalidad 1h / 4h / 1d / 1s** y muchas más velas (se piden por
+  intervalo directamente a Binance, con caché corta; fallback a diario guardado).
+- **Indicadores en TypeScript** (SMA, RSI, Stoch y cruce de EMA 9/21 traducido de
+  Pine Script), con panel de activación y osciladores en subpanel sincronizado.
+  Infra extensible: `indicators/{types,builtin,registry}.ts` + `utils/pineAdapter.ts`.
 
 ### Rendimiento y correcciones (esta ronda)
 - **Precios en lote y desde caché (clave con muchos activos):** el resumen ya no

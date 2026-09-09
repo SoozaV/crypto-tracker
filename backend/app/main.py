@@ -264,34 +264,78 @@ def asset_changes(asset_id: int, db: Session = Depends(get_db)):
 
 
 # --- OHLCV crudo para el frontend (Fase 4) -----------------------------------
+_ALLOWED_INTERVALS = {"1h", "4h", "1d", "1w"}
+
+
 @app.get("/api/asset/{asset_id}/ohlcv")
 def asset_ohlcv(
     asset_id: int,
-    days: int = Query(30, ge=1, le=1000),
+    interval: str = Query("1d", description="1h, 4h, 1d o 1w"),
+    limit: int = Query(300, ge=10, le=1000, description="Número de velas"),
     db: Session = Depends(get_db),
 ):
     """
-    Velas OHLCV crudas (tarea 4.1). El backend NO calcula indicadores: solo sirve
-    los datos; el frontend los calcula (RSI, SMA, etc.) con `technicalindicators`.
-    Si aún no hay histórico guardado, lo descarga de Binance una vez.
+    Velas OHLCV crudas (tarea 4.1) en la temporalidad pedida. El backend NO calcula
+    indicadores: solo sirve los datos; el frontend los calcula (RSI/SMA/…) con
+    `technicalindicators`. Se obtienen de Binance (soporta 1h/4h/1d/1w) con caché
+    corta; si Binance falla y la temporalidad es diaria, cae al histórico guardado.
     """
     asset = db.get(Asset, asset_id)
     if asset is None:
         raise HTTPException(status_code=404, detail="Activo no encontrado.")
-    try:
-        rows = ensure_ohlcv(db, asset, days=days)
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=502, detail=f"Error obteniendo OHLCV: {exc}")
-    return {
+    interval = interval.lower()
+    if interval not in _ALLOWED_INTERVALS:
+        raise HTTPException(status_code=400, detail=f"Temporalidad no soportada: {interval}.")
+
+    from .services.price_cache import price_cache
+
+    def _serialize(candles) -> list[dict]:
+        out = []
+        for c in candles:
+            ts = getattr(c, "timestamp_utc", None)
+            out.append({
+                "timestamp": ts.replace(microsecond=0).isoformat() + "Z",
+                "open": str(c.open), "high": str(c.high),
+                "low": str(c.low), "close": str(c.close),
+            })
+        return out
+
+    cache_key = f"ohlcv:{asset.binance_symbol}:{interval}:{limit}"
+    cached = price_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    candles = None
+    if asset.binance_symbol:
+        try:
+            from .services.binance_client import get_historical_ohlcv
+            candles = get_historical_ohlcv(asset.binance_symbol, days=limit, interval=interval)
+        except Exception:  # noqa: BLE001 -> intentamos fallback abajo
+            candles = None
+
+    if candles is None:
+        # Fallback: histórico diario guardado (solo tiene sentido para 1d).
+        if interval != "1d":
+            raise HTTPException(
+                status_code=502,
+                detail="No se pudieron obtener velas de Binance para esta temporalidad "
+                       "(¿par sin binance_symbol o API restringida en tu región?).",
+            )
+        try:
+            candles = ensure_ohlcv(db, asset, days=limit)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=502, detail=f"Error obteniendo OHLCV: {exc}")
+
+    payload = {
         "asset_id": asset.id,
         "symbol": asset.symbol,
-        "days": days,
-        "candles": [{
-            "timestamp": r.timestamp_utc.replace(microsecond=0).isoformat() + "Z",
-            "open": str(r.open), "high": str(r.high),
-            "low": str(r.low), "close": str(r.close),
-        } for r in rows],
+        "interval": interval,
+        "limit": limit,
+        "candles": _serialize(candles),
     }
+    # Caché corta: intradía 60s, diario/semanal 300s.
+    price_cache.set(cache_key, payload, ttl_seconds=60 if interval in ("1h", "4h") else 300)
+    return payload
 
 
 # --- Escritura / lectura de datos (apoyo) ------------------------------------

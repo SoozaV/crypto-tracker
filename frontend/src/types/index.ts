@@ -93,10 +93,13 @@ export interface OhlcvCandle {
   close: string;
 }
 
+export type Interval = '1h' | '4h' | '1d' | '1w';
+
 export interface OhlcvResponse {
   asset_id: number;
   symbol: string;
-  days: number;
+  interval: Interval;
+  limit: number;
   candles: OhlcvCandle[];
 }
 
