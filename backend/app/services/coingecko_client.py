@@ -173,10 +173,6 @@ def prefetch_markets(coingecko_ids: list[str], use_cache: bool = True) -> dict[s
                 result[cid] = md
     return result
 
-    if use_cache:
-        return price_cache.get_or_set(cache_key, _fetch)
-    return _fetch()
-
 
 # Lista completa de monedas de CoinGecko (id, symbol, name). Se descarga UNA vez
 # y se cachea muchas horas; el buscador filtra sobre ella en local para NO llamar

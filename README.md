@@ -170,6 +170,20 @@ Añadir un indicador nuevo (p. ej. traducido de Pine Script):
 
 ## Cambios recientes (Fase 5)
 
+### Correcciones tras revisión de código
+- **Precio negativo rechazado (bug real):** `add_transaction` no validaba `price`;
+  ahora un precio negativo se rechaza con HTTP 400 (antes podía ensuciar
+  ACB/PnL/coste). Con test de regresión.
+- **Código muerto eliminado** en `prefetch_markets` (líneas inalcanzables tras el
+  `return`, residuo de un refactor).
+- **Binance ahora reintenta 5xx** (antes solo conexión/timeout), igual que
+  CoinGecko, pero sigue sin reintentar 4xx/429. Con test de regresión.
+- **Cron más amable con Binance:** pequeña pausa entre activos
+  (`BINANCE_CRON_DELAY`, 0.1s) para no encadenar peticiones con muchos símbolos.
+- **Docstring de la caché corregido:** la caché en memoria es válida con **un
+  solo worker** (como arranca `run.py`); con `--workers N>1` haría falta una
+  caché compartida. (Sin cambio funcional: el uso local es de 1 worker.)
+
 ### Fase 7 + gráfico
 - **Osciladores alineados con las velas:** además de igualar el ancho de la
   escala de precio, el panel del oscilador recibe una serie "fantasma" que cubre

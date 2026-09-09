@@ -233,3 +233,28 @@ def test_prefetch_only_fetches_missing(monkeypatch):
     cg.prefetch_markets(["bitcoin"])                 # pide bitcoin
     cg.prefetch_markets(["bitcoin", "solana"])       # solo debería pedir solana
     assert calls["ids"] == ["bitcoin", "solana"]
+
+
+def test_binance_retries_on_5xx(monkeypatch):
+    """Binance ahora reintenta ante 5xx (antes solo conexión/timeout), igual que
+    CoinGecko. Regresión del informe de revisión."""
+    import app.services.binance_client as bc
+    calls = {"n": 0}
+
+    class _Resp:
+        def __init__(self, status): self.status_code = status
+        def json(self): return [[0, "1", "2", "0.5", "1.5", "10", 0]]
+        def raise_for_status(self):
+            if self.status_code >= 500:
+                import requests as rq
+                err = rq.HTTPError("500"); err.response = self
+                raise err
+
+    def fake_get(url, params=None, timeout=None):
+        calls["n"] += 1
+        return _Resp(503 if calls["n"] < 2 else 200)  # falla 1 vez, luego OK
+
+    monkeypatch.setattr(bc.requests, "get", fake_get)
+    candles = bc.get_historical_ohlcv("BTCUSDT", days=1, interval="1d")
+    assert calls["n"] == 2      # reintentó tras el 503
+    assert len(candles) == 1

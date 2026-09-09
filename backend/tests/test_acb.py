@@ -204,3 +204,17 @@ def test_backdated_insert_recomputes_correctly(db, env):
     st = calculate_acb(db, binance.id, btc.id)
     assert st.total_quantity == D("2")
     assert st.total_cost_basis == D("80000")
+
+
+def test_negative_price_is_rejected(db):
+    """No se permite registrar una transacción con precio negativo (ensuciaría el
+    ACB/PnL). Regresión del informe de revisión."""
+    from app.services.acb_engine import ACBError, add_transaction, get_or_create_asset, get_or_create_wallet
+    w = get_or_create_wallet(db, "W", "EXCHANGE")
+    a = get_or_create_asset(db, "BTC", coingecko_id="bitcoin")
+    db.flush()
+    with pytest.raises(ACBError):
+        add_transaction(
+            db, wallet_id=w.id, asset_id=a.id, tx_type="BUY",
+            quantity="1", price="-100", date="2026-01-01T00:00:00+00:00",
+        )

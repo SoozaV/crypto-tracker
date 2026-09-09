@@ -199,6 +199,8 @@ def add_transaction(
     q = D(quantity)
     if q <= ZERO:
         raise ACBError("La cantidad debe ser mayor que 0.")
+    if D(price) < ZERO:
+        raise ACBError("El precio no puede ser negativo.")
     if D(fee) < ZERO:
         raise ACBError("El fee no puede ser negativo.")
 

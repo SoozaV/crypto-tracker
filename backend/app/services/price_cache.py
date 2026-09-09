@@ -5,7 +5,10 @@ Evita machacar la API de CoinGecko (y su rate limit) repitiendo la misma consult
 en una ventana corta. Por defecto TTL=60s para el precio en vivo.
 
 El reloj es inyectable (`clock`) para poder testear la expiración sin `sleep`.
-Es thread-safe (un lock), suficiente para uvicorn con varios workers en local.
+Es thread-safe (un lock). Vive en memoria de proceso: es adecuada con UN solo
+worker (como arranca `run.py`). Si algún día se despliega con `--workers N>1`,
+cada worker tendría su propia caché y las llamadas a la API se multiplicarían;
+en ese caso convendría una caché compartida (p. ej. Redis).
 """
 from __future__ import annotations
 

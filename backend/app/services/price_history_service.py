@@ -9,6 +9,8 @@ Este servicio es el que ejecutará el cron job diario a las 00:00 UTC (tarea 4.2
 """
 from __future__ import annotations
 
+import os
+import time
 from typing import Iterable, Optional
 
 from sqlalchemy import select
@@ -67,10 +69,18 @@ def update_price_history(
 
 
 def update_all_assets(db: Session, days: int = 200) -> dict[str, tuple[int, int]]:
-    """Actualiza el histórico de TODOS los activos del catálogo (para el cron)."""
+    """Actualiza el histórico de TODOS los activos del catálogo (para el cron).
+
+    Entre activos espera un poco (BINANCE_CRON_DELAY, 0.1s por defecto) para ser
+    amable con Binance y no encadenar peticiones que puedan provocar 429/418 con
+    muchos activos. Un fallo en un activo no tumba al resto.
+    """
+    delay = float(os.getenv("BINANCE_CRON_DELAY", "0.1"))
     assets = db.execute(select(Asset)).scalars().all()
     report: dict[str, tuple[int, int]] = {}
-    for asset in assets:
+    for i, asset in enumerate(assets):
+        if i > 0 and delay > 0:
+            time.sleep(delay)
         try:
             report[asset.symbol] = update_price_history(db, asset, days=days, commit=False)
         except Exception as exc:  # noqa: BLE001  -> un activo no debe tumbar el resto

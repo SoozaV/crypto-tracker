@@ -20,7 +20,7 @@ from typing import Any
 import requests
 from tenacity import (
     retry,
-    retry_if_exception_type,
+    retry_if_exception,
     stop_after_attempt,
     wait_exponential,
 )
@@ -31,6 +31,17 @@ _TIMEOUT = (3.05, 10)
 
 class OHLCVError(RuntimeError):
     """Fallo al obtener velas OHLCV."""
+
+
+def _should_retry(exc: BaseException) -> bool:
+    """Reintenta ante problemas transitorios (conexión, timeout, 5xx), pero NO ante
+    4xx como 429/418 (reintentarlos empeora el rate limit). Misma política que el
+    cliente de CoinGecko, para que ambos sean consistentes."""
+    if isinstance(exc, (requests.ConnectionError, requests.Timeout)):
+        return True
+    if isinstance(exc, requests.HTTPError) and exc.response is not None:
+        return exc.response.status_code >= 500
+    return False
 
 
 @dataclass
@@ -55,7 +66,7 @@ class Candle:
     reraise=True,
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=0.5, min=0.5, max=4),
-    retry=retry_if_exception_type((requests.ConnectionError, requests.Timeout)),
+    retry=retry_if_exception(_should_retry),
 )
 def _get_klines(symbol: str, interval: str, limit: int) -> list[list[Any]]:
     url = f"{BINANCE_BASE_URL}/api/v3/klines"
